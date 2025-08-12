@@ -1,4 +1,4 @@
-#ifndef MANEUVER_MODEL_H
+ï»¿#ifndef MANEUVER_MODEL_H
 #define MANEUVER_MODEL_H
 
 #include <string>
@@ -6,7 +6,7 @@
 #include <cmath>
 #include "AircraftModelLibrary.h"
 
-// »ú¶¯²ÎÊı½á¹¹Ìå
+// æœºåŠ¨å‚æ•°ç»“æ„ä½“
 struct ManeuverParameters {
 	double turnRate;
 	double climbRate;
@@ -22,7 +22,7 @@ struct ManeuverParameters {
 	double getActualPitchRate(const AircraftPerformance& perf) const;
 };
 
-// »ú¶¯×´Ì¬½á¹¹Ìå
+// æœºåŠ¨çŠ¶æ€ç»“æ„ä½“
 struct ManeuverState {
 	double totalTime;
 	double currentPhase;
@@ -31,7 +31,7 @@ struct ManeuverState {
 	void reset();
 };
 
-// »ú¶¯Ä£ĞÍ»ùÀà
+// æœºåŠ¨æ¨¡å‹åŸºç±»
 class ManeuverModel {
 public:
 	virtual ~ManeuverModel() = default;
@@ -41,14 +41,14 @@ public:
 	virtual void reset() = 0;
 };
 
-// »ú¶¯Ä£ĞÍ¹¤³§
+// æœºåŠ¨æ¨¡å‹å·¥å‚
 class ManeuverModelFactory {
 public:
 	static std::shared_ptr<ManeuverModel> createManeuverModel(const std::string& name);
 	static ManeuverParameters getDefaultParameters(const std::string& maneuverType);
 };
 
-// ¾ßÌå»ú¶¯Ä£ĞÍ×ÓÀàÉùÃ÷
+// å…·ä½“æœºåŠ¨æ¨¡å‹å­ç±»å£°æ˜
 class GeneralSManeuverModel : public ManeuverModel {
 public:
 	void initialize(const ManeuverParameters& params) override;

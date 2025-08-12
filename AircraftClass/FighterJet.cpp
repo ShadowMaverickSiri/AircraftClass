@@ -1,4 +1,4 @@
-#include <string>
+ï»¿#include <string>
 #include "FighterJet.h"
 #include <cmath>
 
@@ -15,7 +15,7 @@ FighterJet::FighterJet(const std::string& modelName, const std::string& type)
 	}
 }
 
-// ¼ÆËã¼ÓËÙ¶È
+// è®¡ç®—åŠ é€Ÿåº¦
 Velocity3 FighterJet::computeAcceleration() const {
 	double vx = velocity.north;
 	double vy = velocity.up;
@@ -28,7 +28,7 @@ Velocity3 FighterJet::computeAcceleration() const {
 		double dragAcc = dragCoeff * speed * speed / performance.mass;
 		double netAcc = thrustAcc - dragAcc;
 
-		// ¼ÓËÙ¶È·½ÏòÓëµ±Ç°ËÙ¶È·½ÏòÒ»ÖÂ
+		// åŠ é€Ÿåº¦æ–¹å‘ä¸å½“å‰é€Ÿåº¦æ–¹å‘ä¸€è‡´
 		acc.north = netAcc * (vx / speed);
 		acc.up = netAcc * (vy / speed);
 		acc.east = netAcc * (vz / speed);

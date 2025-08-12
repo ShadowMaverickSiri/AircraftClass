@@ -1,4 +1,4 @@
-#ifndef AIRCRAFT_MODULE_H
+ï»¿#ifndef AIRCRAFT_MODULE_H
 #define AIRCRAFT_MODULE_H
 
 #include <string>
@@ -6,14 +6,14 @@
 // Forward declaration
 class Aircraft;
 
-// Í¨ÓÃ¹¦ÄÜÄ£¿é»ùÀà
+// é€šç”¨åŠŸèƒ½æ¨¡å—åŸºç±»
 class AircraftModule {
 public:
 	virtual ~AircraftModule() = default;
 	virtual std::string getModuleName() const = 0;
 	virtual void update(Aircraft& aircraft, double dt) {}
 };
-// Ê¾Àı£º×Ô¶¨Òå¸ÉÈÅÄ£¿é
+// ç¤ºä¾‹ï¼šè‡ªå®šä¹‰å¹²æ‰°æ¨¡å—
 class JammerModule : public AircraftModule {
 public:
 	std::string getModuleName() const override { return "Jammer"; }
@@ -22,7 +22,7 @@ public:
 	bool isJamming() const { return isActive; }
 	void update(Aircraft& aircraft, double dt) override {
 		if (isActive) {
-			// ¸ÉÈÅÂß¼­Ê¾Àı
+			// å¹²æ‰°é€»è¾‘ç¤ºä¾‹
 		}
 	}
 private:

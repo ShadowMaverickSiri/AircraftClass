@@ -1,18 +1,18 @@
-#ifndef FIGHTER_JET_H
+ï»¿#ifndef FIGHTER_JET_H
 #define FIGHTER_JET_H
 
 #include "AircraftModelLibrary.h"
 #include <string>
 
-// Õ½¶·»úÀà£º¼Ì³Ð×Ô Aircraft
+// æˆ˜æ–—æœºç±»ï¼šç»§æ‰¿è‡ª Aircraft
 class FighterJet : public Aircraft {
 public:
 	FighterJet(const std::string& modelName, const std::string& type);
 	Velocity3 computeAcceleration() const override;
 
 private:
-	double maxThrust;   // ×î´óÍÆÁ¦ (Å£¶Ù)
-	double dragCoeff;   // ×èÁ¦ÏµÊý
+	double maxThrust;   // æœ€å¤§æŽ¨åŠ› (ç‰›é¡¿)
+	double dragCoeff;   // é˜»åŠ›ç³»æ•°
 };
 
 #endif // FIGHTER_JET_H
