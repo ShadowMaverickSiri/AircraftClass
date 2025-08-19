@@ -11,14 +11,33 @@
 #include <string>
 #include "AircraftModule.h"
 
-// Forward declaration for ManeuverModel, ManeuverParameters, ManeuverState
-class ManeuverModel;
-struct ManeuverParameters;
-struct ManeuverState;
+// Forward declaration for UnifiedManeuverModel
+class UnifiedManeuverModel;
+struct UnifiedManeuverParameters;
 
-// 定义圆周率
+// 定义圆周率常量
+namespace Constants {
+    constexpr double PI = 3.14159265358979323846;
+    constexpr double DEG_TO_RAD = PI / 180.0;        // 度转弧度
+    constexpr double RAD_TO_DEG = 180.0 / PI;        // 弧度转度
+	constexpr double EARTH_RADIUS = 6378137.0;        // 地球半径 (米)
+	constexpr double EARTH_RADIUS_SHORTER = 6356752.0; // 地球极半径 (米)
+	constexpr double ECCE1 = 0.08181919084262149; // 地球第一偏心率
+	constexpr double ECCE2 = 0.082094438151917; // 地球第二偏心率
+	constexpr double E_EARTH = 1/298.257222101;  //地球椭球扁率
+}
+
+// 保持向后兼容性（逐步迁移）
 #ifndef M_PI
-#define M_PI 3.14159265358979323846
+#define M_PI Constants::PI
+#endif
+
+#ifndef Re
+#define Re Constants::EARTH_RADIUS
+#endif
+
+#ifndef Rad
+#define Rad Constants::RAD_TO_DEG
 #endif
 
 // 结构体：用经纬高表示位置
@@ -44,14 +63,14 @@ struct AttitudeAngles {
 	AttitudeAngles() : pitch(0.0), roll(0.0), yaw(0.0) {}
 
 	// 转换为度数
-	double getPitchDegrees() const { return pitch * 180.0 / M_PI; }
-	double getRollDegrees() const { return roll * 180.0 / M_PI; }
-	double getYawDegrees() const { return yaw * 180.0 / M_PI; }
+	double getPitchDegrees() const { return pitch * Constants::RAD_TO_DEG; }
+	double getRollDegrees() const { return roll * Constants::RAD_TO_DEG; }
+	double getYawDegrees() const { return yaw * Constants::RAD_TO_DEG; }
 
 	// 从度数设置
-	void setPitchDegrees(double degrees) { pitch = degrees * M_PI / 180.0; }
-	void setRollDegrees(double degrees) { roll = degrees * M_PI / 180.0; }
-	void setYawDegrees(double degrees) { yaw = degrees * M_PI / 180.0; }
+	void setPitchDegrees(double degrees) { pitch = degrees * Constants::DEG_TO_RAD; }
+	void setRollDegrees(double degrees) { roll = degrees * Constants::DEG_TO_RAD; }
+	void setYawDegrees(double degrees) { yaw = degrees * Constants::DEG_TO_RAD; }
 };
 
 // 结构体：包含飞机性能参数
@@ -64,15 +83,24 @@ struct AircraftPerformance {
 	double dragCoefficient;  // 阻力系数
 	double wingArea;         // 机翼面积 (平方米)
 	double mass;             // 飞机质量 (千克)
+	
+	// 新增过载相关参数
+	double maxGForce;        // 最大过载 (G)
+	double maxPositiveG;     // 最大正过载 (G)
+	double maxNegativeG;     // 最大负过载 (G)
+	double maxLateralG;      // 最大侧向过载 (G)
+	double stallSpeed;       // 失速速度 (m/s)
+	double maxSpeed;         // 最大速度 (m/s)
 
 	AircraftPerformance() : maxTurnRate(0.5), maxClimbRate(50.0),
 		maxRollRate(2.0), maxPitchRate(1.0),
 		maxThrust(200000.0), dragCoefficient(0.02),
-		wingArea(50.0), mass(10000.0) {}
+		wingArea(50.0), mass(10000.0),
+		maxGForce(9.0), maxPositiveG(9.0), maxNegativeG(-3.0),
+		maxLateralG(2.0), stallSpeed(80.0), maxSpeed(800.0) {}
 };
 
-// 只保留GeoPosition, Velocity3, AttitudeAngles, AircraftPerformance, Aircraft等基础结构体和类
-// 移除ManeuverModel、ManeuverParameters、ManeuverState等机动相关内容
+//飞行器基类
 class Aircraft {
 public:
 	using ManeuverFunc = std::function<void(Aircraft&, double)>;
@@ -97,22 +125,21 @@ public:
 	virtual Velocity3 computeAcceleration() const = 0;
 
 	// 更新姿态
-	virtual void updateAttitude(double dt);
+	//virtual void updateAttitude(double dt);
 
 	// 传统机动方法（保持向后兼容）
 	void setManeuver(const std::string& name);         // 设置机动
 	void performManeuver(double dt);                   // 执行当前机动
 	static void registerManeuver(const std::string& name, ManeuverFunc func); // 注册机动
 
-	// 新的机动模型方法
-	void setManeuverModel(std::shared_ptr<ManeuverModel> model);  // 设置机动模型
-	void initializeManeuver(const ManeuverParameters& params);    // 初始化机动
-	void updateManeuver(double dt);                               // 更新机动
-	void resetManeuver();                                         // 重置机动状态
+	// 新的统一机动模型方法
+	void setManeuverModel(std::shared_ptr<UnifiedManeuverModel> model);  // 设置机动模型
+	void initializeManeuver(const UnifiedManeuverParameters& params);    // 初始化机动
+	void updateManeuver(double dt);                                      // 更新机动
+	void resetManeuver();                                                // 重置机动状态
 
 	// 获取当前机动状态
-	const std::shared_ptr<ManeuverState> getManeuverState() const { return maneuverState; }
-	const ManeuverParameters* getManeuverParameters() const { return maneuverParams.get(); }
+	const std::shared_ptr<UnifiedManeuverModel> getManeuverModel() const { return currentManeuverModel; }
 
 	// 获取性能参数
 	const AircraftPerformance& getPerformance() const { return performance; }
@@ -155,10 +182,8 @@ protected:
 	ManeuverFunc currentManeuver;
 	static std::map<std::string, ManeuverFunc> maneuvers; // 机动函数映射
 
-	// 新的机动模型成员
-	std::shared_ptr<ManeuverModel> currentManeuverModel;
-	std::shared_ptr<ManeuverState> maneuverState;
-	std::shared_ptr<ManeuverParameters> maneuverParams;
+	// 新的统一机动模型成员
+	std::shared_ptr<UnifiedManeuverModel> currentManeuverModel;
 
 	// 坐标转换相关成员
 	GeoPosition referencePosition;  // 参考位置（用于计算相对位置）

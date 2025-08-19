@@ -1,4 +1,4 @@
-<?xml version="1.0" encoding="utf-8"?>
+﻿<?xml version="1.0" encoding="utf-8"?>
 <Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup Label="ProjectConfigurations">
     <ProjectConfiguration Include="Debug|Win32">
@@ -129,14 +129,16 @@
     <ClInclude Include="AircraftModule.h" />
     <ClInclude Include="EulerAngleCalculator.h" />
     <ClInclude Include="FighterJet.h" />
-    <ClInclude Include="ManeuverModel.h" />
+    <ClInclude Include="KinematicManeuverSystem.h" />
+    <ClInclude Include="UnifiedManeuverSystem.h" />
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="AircraftModelLibrary.cpp" />
     <ClCompile Include="EulerAngleCalculation.cpp" />
     <ClCompile Include="FighterJet.cpp" />
-    <ClCompile Include="ManeuverModel.cpp" />
-    <ClCompile Include="test.cpp" />
+    <ClCompile Include="FighterSplitSTest.cpp" />
+    <ClCompile Include="KinematicManeuverSystem.cpp" />
+    <ClCompile Include="UnifiedManeuverSystem.cpp" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

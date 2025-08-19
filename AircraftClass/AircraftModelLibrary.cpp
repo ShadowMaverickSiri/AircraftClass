@@ -1,6 +1,6 @@
 ﻿#include "AircraftModelLibrary.h"
 #include"EulerAngleCalculator.h"
-#include "ManeuverModel.h"
+#include "UnifiedManeuverSystem.h"
 #include <cmath>
 #include <stdexcept>
 #include <sstream>
@@ -18,9 +18,7 @@ Aircraft::Aircraft(const std::string& type, const std::string& model)
 	attitude(),
 	performance(),
 	currentManeuver(nullptr),
-	currentManeuverModel(nullptr),
-	maneuverState(std::make_shared<ManeuverState>()),
-	maneuverParams(std::make_shared<ManeuverParameters>()) {}
+	currentManeuverModel(nullptr) {}
 
 Aircraft::~Aircraft() {}
 
@@ -58,44 +56,33 @@ void Aircraft::performManeuver(double dt) {
 		currentManeuver(*this, dt);
 }
 
-// 新的操纵模型设置
-void Aircraft::setManeuverModel(std::shared_ptr<ManeuverModel> model) {
+// 新的统一操纵模型设置
+void Aircraft::setManeuverModel(std::shared_ptr<UnifiedManeuverModel> model) {
 	currentManeuverModel = model;
-	if (model) {
-		model->initialize(*maneuverParams);
-		
-		maneuverState->isInitialized = true;
-	}
 }
 
-void Aircraft::initializeManeuver(const ManeuverParameters & params) {
-	*maneuverParams = params;
-	maneuverState = std::make_shared<ManeuverState>();
-	maneuverState->isInitialized = true;
-
+void Aircraft::initializeManeuver(const UnifiedManeuverParameters& params) {
 	if (currentManeuverModel) {
 		currentManeuverModel->initialize(params);
 	}
 }
 
 void Aircraft::updateManeuver(double dt) {
-	if (currentManeuverModel && maneuverState->isInitialized) {
+	if (currentManeuverModel) {
 		currentManeuverModel->update(*this, dt);
-		maneuverState->totalTime += dt;
 	}
 }
 
 void Aircraft::resetManeuver() {
-	maneuverState = std::make_shared<ManeuverState>();
 	if (currentManeuverModel) {
 		currentManeuverModel->reset();
 	}
 }
 
-void Aircraft::updateAttitude(double dt) {
-	// 根据速度更新姿态
-	attitude = EulerAngleCalculator::calculateFromVelocity(velocity);
-}
+//void Aircraft::updateAttitude(double dt) {
+//	// 根据速度更新姿态
+//	attitude = EulerAngleCalculator::calculateFromVelocity(velocity);
+//}
 
 // 设置参考位置
 void Aircraft::setReferencePosition(const GeoPosition & refPos) {

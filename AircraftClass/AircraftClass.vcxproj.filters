@@ -18,16 +18,19 @@
     <ClInclude Include="AircraftModule.h">
       <Filter>头文件</Filter>
     </ClInclude>
-    <ClInclude Include="EulerAngleCalculator.h">
-      <Filter>头文件</Filter>
-    </ClInclude>
-    <ClInclude Include="ManeuverModel.h">
-      <Filter>头文件</Filter>
-    </ClInclude>
     <ClInclude Include="FighterJet.h">
       <Filter>头文件</Filter>
     </ClInclude>
     <ClInclude Include="AircraftModelLibrary.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="UnifiedManeuverSystem.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="KinematicManeuverSystem.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="EulerAngleCalculator.h">
       <Filter>头文件</Filter>
     </ClInclude>
   </ItemGroup>
@@ -35,16 +38,19 @@
     <ClCompile Include="AircraftModelLibrary.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
-    <ClCompile Include="EulerAngleCalculation.cpp">
-      <Filter>源文件</Filter>
-    </ClCompile>
-    <ClCompile Include="ManeuverModel.cpp">
-      <Filter>源文件</Filter>
-    </ClCompile>
     <ClCompile Include="FighterJet.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
-    <ClCompile Include="test.cpp">
+    <ClCompile Include="UnifiedManeuverSystem.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="KinematicManeuverTest.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="KinematicManeuverSystem.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="EulerAngleCalculation.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
   </ItemGroup>
