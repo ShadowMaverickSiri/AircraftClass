@@ -21,9 +21,6 @@
     <ClInclude Include="FighterJet.h">
       <Filter>头文件</Filter>
     </ClInclude>
-    <ClInclude Include="AircraftModelLibrary.h">
-      <Filter>头文件</Filter>
-    </ClInclude>
     <ClInclude Include="UnifiedManeuverSystem.h">
       <Filter>头文件</Filter>
     </ClInclude>
@@ -31,6 +28,9 @@
       <Filter>头文件</Filter>
     </ClInclude>
     <ClInclude Include="EulerAngleCalculator.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="TacviewTelemetry.h">
       <Filter>头文件</Filter>
     </ClInclude>
   </ItemGroup>
@@ -44,13 +44,16 @@
     <ClCompile Include="UnifiedManeuverSystem.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
-    <ClCompile Include="KinematicManeuverTest.cpp">
-      <Filter>源文件</Filter>
-    </ClCompile>
     <ClCompile Include="KinematicManeuverSystem.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
     <ClCompile Include="EulerAngleCalculation.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="TacviewTelemetry.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="KinematicManeuverTest.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
   </ItemGroup>

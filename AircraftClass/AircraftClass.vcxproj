@@ -125,19 +125,20 @@
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
-    <ClInclude Include="AircraftModelLibrary.h" />
     <ClInclude Include="AircraftModule.h" />
     <ClInclude Include="EulerAngleCalculator.h" />
     <ClInclude Include="FighterJet.h" />
     <ClInclude Include="KinematicManeuverSystem.h" />
+    <ClInclude Include="TacviewTelemetry.h" />
     <ClInclude Include="UnifiedManeuverSystem.h" />
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="AircraftModelLibrary.cpp" />
     <ClCompile Include="EulerAngleCalculation.cpp" />
     <ClCompile Include="FighterJet.cpp" />
-    <ClCompile Include="FighterSplitSTest.cpp" />
     <ClCompile Include="KinematicManeuverSystem.cpp" />
+    <ClCompile Include="KinematicManeuverTest.cpp" />
+    <ClCompile Include="TacviewTelemetry.cpp" />
     <ClCompile Include="UnifiedManeuverSystem.cpp" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />

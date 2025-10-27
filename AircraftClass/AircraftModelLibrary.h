@@ -15,7 +15,7 @@
 class UnifiedManeuverModel;
 struct UnifiedManeuverParameters;
 
-// 定义圆周率常量
+// 定义圆周率等常量
 namespace Constants {
     constexpr double PI = 3.14159265358979323846;
     constexpr double DEG_TO_RAD = PI / 180.0;        // 度转弧度
