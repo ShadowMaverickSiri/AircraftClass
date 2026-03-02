@@ -1,53 +1,70 @@
-﻿#ifndef EULER_ANGLE_CALCULATION_H
-#define EULER_ANGLE_CALCULATION_H
+#ifndef EULER_ANGLE_CALCULATOR_H
+#define EULER_ANGLE_CALCULATOR_H
 
-#include"AircraftModelLibrary.h"
+#include "AircraftModelLibrary.h"
 #include <cmath>
+#include <algorithm>
 
-// 欧拉角计算器：专门负责计算飞机的欧拉角（俯仰、滚转、偏航）
+// ============================================================================
+// 欧拉角计算器 - 内联实现
+// ============================================================================
 class EulerAngleCalculator {
 public:
-	// 从速度向量计算基本姿态角
-	static AttitudeAngles calculateFromVelocity(const Velocity3& velocity);
+    // 从速度向量计算基本姿态角
+    static AttitudeAngles calculateFromVelocity(const Velocity3& velocity) {
+        AttitudeAngles attitude;
+        double speed = std::sqrt(velocity.north * velocity.north +
+                                velocity.east * velocity.east +
+                                velocity.up * velocity.up);
 
-	// S形机动的姿态角计算
-	static AttitudeAngles calculateSManeuverAttitude(const Velocity3& velocity,
-		double turnRate, double dt);
+        if (speed > 1e-3) {
+            double horizontalSpeed = std::sqrt(velocity.north * velocity.north +
+                                               velocity.east * velocity.east);
+            attitude.pitch = std::atan2(velocity.up, horizontalSpeed);
+            attitude.yaw = std::atan2(velocity.east, velocity.north);
+            attitude.roll = 0.0;
+        }
+        return attitude;
+    }
 
-	// 筋斗机动的姿态角计算
-	static AttitudeAngles calculateLoopManeuverAttitude(const Velocity3& velocity,
-		double climbRate, double dt);
+    // 姿态角限制
+    static AttitudeAngles limit(const AttitudeAngles& attitude) {
+        AttitudeAngles limited = attitude;
+        limited.pitch = std::max(-MAX_PITCH, std::min(MAX_PITCH, limited.pitch));
+        limited.roll = std::max(-MAX_ROLL, std::min(MAX_ROLL, limited.roll));
+        // 偏航角保持连续性
+        while (limited.yaw > M_PI) limited.yaw -= 2.0 * M_PI;
+        while (limited.yaw < -M_PI) limited.yaw += 2.0 * M_PI;
+        return limited;
+    }
 
-	// 横滚机动的姿态角计算
-	static AttitudeAngles calculateRollManeuverAttitude(const Velocity3& velocity,
-		double rollRate, double dt);
+    // 姿态角插值
+    static AttitudeAngles interpolate(const AttitudeAngles& current,
+                                     const AttitudeAngles& target,
+                                     double alpha) {
+        AttitudeAngles result;
+        result.pitch = current.pitch + alpha * (target.pitch - current.pitch);
+        result.roll = current.roll + alpha * (target.roll - current.roll);
+        result.yaw = current.yaw + alpha * (target.yaw - current.yaw);
+        return limit(result);
+    }
 
-	// 蛇形机动的姿态角计算
-	static AttitudeAngles calculateSnakeManeuverAttitude(const Velocity3& velocity,
-		double turnRate, double amplitude, double dt);
-
-	// 高级S机动的姿态角计算（带高度变化）
-	static AttitudeAngles calculateAdvancedSAttitude(const Velocity3& velocity,
-		double turnRate, double climbRate,
-		double period, double totalTime);
-
-	// 姿态角平滑插值
-	static AttitudeAngles interpolateAttitude(const AttitudeAngles& current,
-		const AttitudeAngles& target,
-		double alpha);
-
-	// 姿态角限制（防止过度旋转）
-	static AttitudeAngles limitAttitudeAngles(const AttitudeAngles& attitude);
-
-	// 姿态角微分（计算角速度）
-	static AttitudeAngles calculateAngularVelocity(const AttitudeAngles& current,
-		const AttitudeAngles& previous,
-		double dt);
+    // 计算角速度
+    static AttitudeAngles calculateAngularVelocity(const AttitudeAngles& current,
+                                                   const AttitudeAngles& previous,
+                                                   double dt) {
+        AttitudeAngles angularVelocity;
+        if (dt > 1e-6) {
+            angularVelocity.pitch = (current.pitch - previous.pitch) / dt;
+            angularVelocity.roll = (current.roll - previous.roll) / dt;
+            angularVelocity.yaw = (current.yaw - previous.yaw) / dt;
+        }
+        return angularVelocity;
+    }
 
 private:
-	static constexpr double MAX_PITCH_ANGLE = M_PI / 3.0;    // 60度
-	static constexpr double MAX_ROLL_ANGLE = M_PI / 2.0;     // 90度
-	static constexpr double MAX_YAW_ANGLE = M_PI;            // 180度
+    static constexpr double MAX_PITCH = M_PI / 3.0;   // 60度
+    static constexpr double MAX_ROLL = M_PI / 2.0;    // 90度
 };
 
-#endif // EULER_ANGLE_CALCULATION_H 
+#endif // EULER_ANGLE_CALCULATOR_H
