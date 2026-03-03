@@ -110,10 +110,14 @@ public:
 
 private:
     double loopRadius = 0.0;
-    double loopCenterNorth = 0.0;
-    double loopCenterUp = 0.0;
     double initialHeading = 0.0;
     double initialSpeed = 0.0;
+    double initialLatitude = 0.0;
+    double initialLongitude = 0.0;
+    double initialAltitude = 0.0;
+    double loopCenterLatitude = 0.0;
+    double loopCenterLongitude = 0.0;
+    double loopCenterAltitude = 0.0;
 };
 
 // ============================================================================
@@ -155,11 +159,19 @@ private:
     Phase currentPhase = ROLL_PHASE;
     double phaseTime = 0.0;
     double rollRate = 0.0;
-    double pushDownRate = 0.0;
+    double rollDuration = 0.0;
+    double pitchDuration = 0.0;
     double initialRoll = 0.0;
     double initialPitch = 0.0;
     double initialYaw = 0.0;
     double initialSpeed = 0.0;
+    double initialLatitude = 0.0;
+    double initialLongitude = 0.0;
+    double initialAltitude = 0.0;
+    double loopRadius = 0.0;
+    double rollEndLatitude = 0.0;
+    double rollEndLongitude = 0.0;
+    double rollEndAltitude = 0.0;
 };
 
 // ============================================================================

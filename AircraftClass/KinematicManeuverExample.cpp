@@ -49,22 +49,24 @@ public:
     }
 
     // 生成对象状态更新行
+    // ACMI 标准格式: ID,T=经度|纬度|高度|滚转|俯仰|偏航
     std::string createObjectUpdate(const GeoPosition& pos, const Velocity3& vel, const AttitudeAngles& att) {
         std::ostringstream oss;
 
-        // ACMI 格式: ID,T=经度|纬度|高度|俯仰|横滚|偏航|北速|天速|东速
+        // 转换角度为度数
+        double rollDeg = att.roll * 180.0 / M_PI;
+        double pitchDeg = att.pitch * 180.0 / M_PI;
+        double yawDeg = att.yaw * 180.0 / M_PI;
+
         oss << objectIDStr_ << ",T="
-            << std::fixed << std::setprecision(8)
+            << std::fixed << std::setprecision(6)
             << pos.longitude << "|"
             << pos.latitude << "|"
             << std::fixed << std::setprecision(1)
             << pos.altitude << "|"
-            << (att.pitch * 180.0 / M_PI) << "|"
-            << (att.roll * 180.0 / M_PI) << "|"
-            << (att.yaw * 180.0 / M_PI) << "|"
-            << vel.north << "|"
-            << vel.up << "|"
-            << vel.east;
+            << rollDeg << "|"      // 滚转
+            << pitchDeg << "|"     // 俯仰
+            << yawDeg;             // 偏航
         return oss.str();
     }
 
@@ -74,6 +76,13 @@ public:
         char buffer[20];
         sprintf_s(buffer, "%llX", objectID_);
         objectIDStr_ = buffer;
+    }
+
+    // 生成时间帧标记（ACMI 格式必需）
+    std::string createTimeFrame(double time) {
+        std::ostringstream oss;
+        oss << "#" << std::fixed << std::setprecision(1) << time;
+        return oss.str();
     }
 
     uint64_t getObjectID() const { return objectID_; }
@@ -156,21 +165,45 @@ void exampleLevelTurn() {
     TacviewExporter exporter;
     exporter.setObjectID(0x3E9);
 
-    // 发送 ACMI 文件头
-    telemetry.broadcastLine(exporter.initializeHeader());
-    std::this_thread::sleep_for(std::chrono::milliseconds(100));
-
-    // 发送对象定义
-    telemetry.broadcastLine(exporter.createAircraftObject("F-16", "Red"));
-    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    // 启用日志记录以便调试
+    telemetry.enableLogging("E:\\MyCode\\AircraftClass-main\\x64\\Debug\\telemetry_log.acmi");
 
     std::cout << "\n[Tacview] 请按以下步骤连接 Tacview:\n";
     std::cout << "  1. 打开 Tacview 软件\n";
     std::cout << "  2. 选择: 文件 -> 连接到实时遥测源...\n";
     std::cout << "  3. 选择 127.0.0.1:42674\n";
-    std::cout << "\n连接成功后，按 Enter 键开始仿真...\n";
-    std::cin.ignore();
-    std::cin.get();
+    std::cout << "\n等待 Tacview 连接...\n";
+
+    // 等待 Tacview 连接
+    while (!telemetry.hasClients()) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    }
+    std::cout << "[Tacview] 已连接! 发送初始化数据...\n\n";
+
+    // Tacview 连接后，发送初始化数据
+    std::this_thread::sleep_for(std::chrono::milliseconds(500));  // 等待握手完成
+
+    // 发送 ACMI 文件头
+    telemetry.broadcastLine(exporter.initializeHeader());
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+
+    // 发送初始时间帧（ACMI 格式必需）
+    std::string timeFrame0 = exporter.createTimeFrame(0.0);
+    telemetry.broadcastLine(timeFrame0);
+    std::cout << "[发送] " << timeFrame0 << "\n";
+
+    // 发送对象定义（包含初始位置）
+    std::ostringstream initLine;
+    initLine << exporter.createAircraftObject("F-16", "Red")
+             << ",T=" << std::fixed << std::setprecision(6)
+             << fighter.position.longitude << "|"
+             << fighter.position.latitude << "|"
+             << std::fixed << std::setprecision(1)
+             << fighter.position.altitude;
+    std::string initStr = initLine.str();
+    telemetry.broadcastLine(initStr);
+    std::cout << "[发送] " << initStr << "\n";
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
     std::cout << "\n机型: F-16 Fighting Falcon\n";
     std::cout << "初始高度: " << fighter.position.altitude << " m\n";
@@ -182,13 +215,26 @@ void exampleLevelTurn() {
 
     // 仿真步长
     const double dt = 0.1;
+    bool firstPrint = true;
 
-    for (double t = 0.0; t <= params.duration + 2.0; t += dt) {
+    for (double t = dt; t <= params.duration + 2.0; t += dt) {
         maneuver->update(t, dt, fighter.position, fighter.velocity, fighter.attitude);
         printState(t, fighter.position, fighter.velocity, fighter.attitude, maneuver->getCurrentGForce());
 
-        // 发送 Tacview 遥测数据
-        telemetry.broadcastLine(exporter.createObjectUpdate(fighter.position, fighter.velocity, fighter.attitude));
+        // 发送 Tacview 遥测数据：先发送时间帧，再发送对象更新
+        std::string timeFrame = exporter.createTimeFrame(t);
+        std::string objUpdate = exporter.createObjectUpdate(fighter.position, fighter.velocity, fighter.attitude);
+        telemetry.broadcastLine(timeFrame);
+        telemetry.broadcastLine(objUpdate);
+
+        // 打印第一次发送的数据用于调试
+        if (firstPrint) {
+            std::cout << "\n[调试] 第一次发送的数据:\n";
+            std::cout << "  " << timeFrame << "\n";
+            std::cout << "  " << objUpdate << "\n\n";
+            firstPrint = false;
+        }
+
         std::this_thread::sleep_for(std::chrono::milliseconds(50));  // 降低发送速率，便于观察
     }
 
@@ -215,7 +261,7 @@ void exampleLoop() {
     params.initialPosition = fighter.position;
     params.initialVelocity = fighter.velocity;
     params.targetGForce = 4.0;
-    params.duration = 20.0;
+    params.duration = 25.0;
 
     auto maneuver = Factory::create(Type::LOOP);
     maneuver->initialize(params);
@@ -223,18 +269,45 @@ void exampleLoop() {
     TacviewExporter exporter;
     exporter.setObjectID(0x3EA);  // 不同对象ID
 
-    telemetry.broadcastLine(exporter.initializeHeader());
-    std::this_thread::sleep_for(std::chrono::milliseconds(100));
-    telemetry.broadcastLine(exporter.createAircraftObject("F-22", "Blue"));
-    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    // 启用日志记录
+    telemetry.enableLogging("E:\\MyCode\\AircraftClass-main\\x64\\Debug\\telemetry_log.acmi");
 
     std::cout << "\n[Tacview] 请按以下步骤连接 Tacview:\n";
     std::cout << "  1. 打开 Tacview 软件\n";
     std::cout << "  2. 选择: 文件 -> 连接到实时遥测源...\n";
     std::cout << "  3. 选择 127.0.0.1:42674\n";
-    std::cout << "\n连接成功后，按 Enter 键开始仿真...\n";
-    std::cin.ignore();
-    std::cin.get();
+    std::cout << "\n等待 Tacview 连接...\n";
+
+    // 等待 Tacview 连接
+    while (!telemetry.hasClients()) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    }
+    std::cout << "[Tacview] 已连接! 发送初始化数据...\n\n";
+
+    // Tacview 连接后，发送初始化数据
+    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+
+    // 发送 ACMI 文件头
+    telemetry.broadcastLine(exporter.initializeHeader());
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+
+    // 发送初始时间帧
+    std::string timeFrame0 = exporter.createTimeFrame(0.0);
+    telemetry.broadcastLine(timeFrame0);
+    std::cout << "[发送] " << timeFrame0 << "\n";
+
+    // 发送对象定义（包含初始位置）
+    std::ostringstream initLine;
+    initLine << exporter.createAircraftObject("F-22", "Blue")
+             << ",T=" << std::fixed << std::setprecision(6)
+             << fighter.position.longitude << "|"
+             << fighter.position.latitude << "|"
+             << std::fixed << std::setprecision(1)
+             << fighter.position.altitude;
+    std::string initStr = initLine.str();
+    telemetry.broadcastLine(initStr);
+    std::cout << "[发送] " << initStr << "\n";
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
     std::cout << "\n机型: F-22 Raptor\n";
     std::cout << "机动参数: " << params.targetGForce << "G 筋斗, " << params.duration << "秒\n\n";
@@ -243,11 +316,25 @@ void exampleLoop() {
     std::cout << "-----------------------------------------------------------\n";
 
     const double dt = 0.1;
+    bool firstPrint = true;
 
-    for (double t = 0.0; t <= params.duration; t += dt) {
+    for (double t = dt; t <= params.duration; t += dt) {
         maneuver->update(t, dt, fighter.position, fighter.velocity, fighter.attitude);
         printState(t, fighter.position, fighter.velocity, fighter.attitude, maneuver->getCurrentGForce());
-        telemetry.broadcastLine(exporter.createObjectUpdate(fighter.position, fighter.velocity, fighter.attitude));
+
+        // 发送时间帧和对象更新
+        std::string timeFrame = exporter.createTimeFrame(t);
+        std::string objUpdate = exporter.createObjectUpdate(fighter.position, fighter.velocity, fighter.attitude);
+        telemetry.broadcastLine(timeFrame);
+        telemetry.broadcastLine(objUpdate);
+
+        if (firstPrint) {
+            std::cout << "\n[调试] 第一次发送的数据:\n";
+            std::cout << "  " << timeFrame << "\n";
+            std::cout << "  " << objUpdate << "\n\n";
+            firstPrint = false;
+        }
+
         std::this_thread::sleep_for(std::chrono::milliseconds(50));
     }
 
@@ -273,7 +360,7 @@ void exampleSplitS() {
     auto params = Factory::getDefaultParams(Type::SPLIT_S);
     params.initialPosition = fighter.position;
     params.initialVelocity = fighter.velocity;
-    params.duration = 15.0;
+    params.duration = 30.;
     params.rollDirection = 1.0;
 
     auto maneuver = Factory::create(Type::SPLIT_S);
@@ -282,18 +369,45 @@ void exampleSplitS() {
     TacviewExporter exporter;
     exporter.setObjectID(0x3EB);
 
-    telemetry.broadcastLine(exporter.initializeHeader());
-    std::this_thread::sleep_for(std::chrono::milliseconds(100));
-    telemetry.broadcastLine(exporter.createAircraftObject("F-35", "Green"));
-    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    // 启用日志记录
+    telemetry.enableLogging("E:\\MyCode\\AircraftClass-main\\x64\\Debug\\telemetry_log.acmi");
 
     std::cout << "\n[Tacview] 请按以下步骤连接 Tacview:\n";
     std::cout << "  1. 打开 Tacview 软件\n";
     std::cout << "  2. 选择: 文件 -> 连接到实时遥测源...\n";
     std::cout << "  3. 选择 127.0.0.1:42674\n";
-    std::cout << "\n连接成功后，按 Enter 键开始仿真...\n";
-    std::cin.ignore();
-    std::cin.get();
+    std::cout << "\n等待 Tacview 连接...\n";
+
+    // 等待 Tacview 连接
+    while (!telemetry.hasClients()) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    }
+    std::cout << "[Tacview] 已连接! 发送初始化数据...\n\n";
+
+    // Tacview 连接后，发送初始化数据
+    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+
+    // 发送 ACMI 文件头
+    telemetry.broadcastLine(exporter.initializeHeader());
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+
+    // 发送初始时间帧
+    std::string timeFrame0 = exporter.createTimeFrame(0.0);
+    telemetry.broadcastLine(timeFrame0);
+    std::cout << "[发送] " << timeFrame0 << "\n";
+
+    // 发送对象定义（包含初始位置）
+    std::ostringstream initLine;
+    initLine << exporter.createAircraftObject("F-35", "Green")
+             << ",T=" << std::fixed << std::setprecision(6)
+             << fighter.position.longitude << "|"
+             << fighter.position.latitude << "|"
+             << std::fixed << std::setprecision(1)
+             << fighter.position.altitude;
+    std::string initStr = initLine.str();
+    telemetry.broadcastLine(initStr);
+    std::cout << "[发送] " << initStr << "\n";
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
     std::cout << "\n机型: F-35 Lightning II\n";
     std::cout << "初始高度: " << fighter.position.altitude << " m\n";
@@ -301,11 +415,12 @@ void exampleSplitS() {
 
     std::vector<SimulationRecord> records;
     const double dt = 0.1;
+    bool firstPrint = true;
 
     std::cout << "时间 | 经度 | 纬度 | 高度 | 过载 | 俯仰 | 滚转 | 偏航\n";
     std::cout << "-----------------------------------------------------------\n";
 
-    for (double t = 0.0; t <= params.duration; t += dt) {
+    for (double t = dt; t <= params.duration; t += dt) {
         maneuver->update(t, dt, fighter.position, fighter.velocity, fighter.attitude);
 
         // 记录数据
@@ -323,8 +438,19 @@ void exampleSplitS() {
             maneuver->getCurrentGForce()
         });
 
-        // 发送 Tacview 数据
-        telemetry.broadcastLine(exporter.createObjectUpdate(fighter.position, fighter.velocity, fighter.attitude));
+        // 发送 Tacview 数据：先发送时间帧，再发送对象更新
+        std::string timeFrame = exporter.createTimeFrame(t);
+        std::string objUpdate = exporter.createObjectUpdate(fighter.position, fighter.velocity, fighter.attitude);
+        telemetry.broadcastLine(timeFrame);
+        telemetry.broadcastLine(objUpdate);
+
+        if (firstPrint) {
+            std::cout << "\n[调试] 第一次发送的数据:\n";
+            std::cout << "  " << timeFrame << "\n";
+            std::cout << "  " << objUpdate << "\n\n";
+            firstPrint = false;
+        }
+
         std::this_thread::sleep_for(std::chrono::milliseconds(50));
 
         // 每秒打印一次
@@ -391,18 +517,45 @@ void exampleRoll() {
     TacviewExporter exporter;
     exporter.setObjectID(0x3EC);
 
-    telemetry.broadcastLine(exporter.initializeHeader());
-    std::this_thread::sleep_for(std::chrono::milliseconds(100));
-    telemetry.broadcastLine(exporter.createAircraftObject("Su-27", "Orange"));
-    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    // 启用日志记录
+    telemetry.enableLogging("E:\\MyCode\\AircraftClass-main\\x64\\Debug\\telemetry_log.acmi");
 
     std::cout << "\n[Tacview] 请按以下步骤连接 Tacview:\n";
     std::cout << "  1. 打开 Tacview 软件\n";
     std::cout << "  2. 选择: 文件 -> 连接到实时遥测源...\n";
     std::cout << "  3. 选择 127.0.0.1:42674\n";
-    std::cout << "\n连接成功后，按 Enter 键开始仿真...\n";
-    std::cin.ignore();
-    std::cin.get();
+    std::cout << "\n等待 Tacview 连接...\n";
+
+    // 等待 Tacview 连接
+    while (!telemetry.hasClients()) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    }
+    std::cout << "[Tacview] 已连接! 发送初始化数据...\n\n";
+
+    // Tacview 连接后，发送初始化数据
+    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+
+    // 发送 ACMI 文件头
+    telemetry.broadcastLine(exporter.initializeHeader());
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+
+    // 发送初始时间帧
+    std::string timeFrame0 = exporter.createTimeFrame(0.0);
+    telemetry.broadcastLine(timeFrame0);
+    std::cout << "[发送] " << timeFrame0 << "\n";
+
+    // 发送对象定义（包含初始位置）
+    std::ostringstream initLine;
+    initLine << exporter.createAircraftObject("Su-27", "Orange")
+             << ",T=" << std::fixed << std::setprecision(6)
+             << fighter.position.longitude << "|"
+             << fighter.position.latitude << "|"
+             << std::fixed << std::setprecision(1)
+             << fighter.position.altitude;
+    std::string initStr = initLine.str();
+    telemetry.broadcastLine(initStr);
+    std::cout << "[发送] " << initStr << "\n";
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
     std::cout << "\n机型: Su-27 Flanker\n";
     std::cout << "机动参数: " << params.duration << "秒 360度横滚\n\n";
@@ -411,11 +564,25 @@ void exampleRoll() {
     std::cout << "-----------------------------------------------------------\n";
 
     const double dt = 0.1;
+    bool firstPrint = true;
 
-    for (double t = 0.0; t <= params.duration; t += dt) {
+    for (double t = dt; t <= params.duration; t += dt) {
         maneuver->update(t, dt, fighter.position, fighter.velocity, fighter.attitude);
         printState(t, fighter.position, fighter.velocity, fighter.attitude, maneuver->getCurrentGForce());
-        telemetry.broadcastLine(exporter.createObjectUpdate(fighter.position, fighter.velocity, fighter.attitude));
+
+        // 发送时间帧和对象更新
+        std::string timeFrame = exporter.createTimeFrame(t);
+        std::string objUpdate = exporter.createObjectUpdate(fighter.position, fighter.velocity, fighter.attitude);
+        telemetry.broadcastLine(timeFrame);
+        telemetry.broadcastLine(objUpdate);
+
+        if (firstPrint) {
+            std::cout << "\n[调试] 第一次发送的数据:\n";
+            std::cout << "  " << timeFrame << "\n";
+            std::cout << "  " << objUpdate << "\n\n";
+            firstPrint = false;
+        }
+
         std::this_thread::sleep_for(std::chrono::milliseconds(50));
     }
 
