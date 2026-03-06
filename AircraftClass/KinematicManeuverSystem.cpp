@@ -1,8 +1,231 @@
 #include "KinematicManeuverSystem.h"
 #include <algorithm>
 #include <stdexcept>
+#include <iostream>
 
 using namespace KinematicManeuver;
+
+// ============================================================================
+// Quaternion 四元数类实现
+// ============================================================================
+
+// 从欧拉角构造四元数 (ZYX顺序: yaw->pitch->roll)
+Quaternion Quaternion::fromEuler(double roll, double pitch, double yaw) {
+    double cy = std::cos(yaw * 0.5);
+    double sy = std::sin(yaw * 0.5);
+    double cp = std::cos(pitch * 0.5);
+    double sp = std::sin(pitch * 0.5);
+    double cr = std::cos(roll * 0.5);
+    double sr = std::sin(roll * 0.5);
+
+    Quaternion q;
+    q.w = cr * cp * cy + sr * sp * sy;
+    q.x = sr * cp * cy - cr * sp * sy;
+    q.y = cr * sp * cy + sr * cp * sy;
+    q.z = cr * cp * sy - sr * sp * cy;
+    return q;
+}
+
+Quaternion Quaternion::fromEuler(const AttitudeAngles& attitude) {
+    return fromEuler(attitude.roll, attitude.pitch, attitude.yaw);
+}
+
+// 从旋转轴和角度构造四元数
+Quaternion Quaternion::fromAxisAngle(double axisX, double axisY, double axisZ, double angle) {
+    double halfAngle = angle * 0.5;
+    double sinHalf = std::sin(halfAngle);
+    double cosHalf = std::cos(halfAngle);
+
+    // 归一化轴向量
+    double len = std::sqrt(axisX * axisX + axisY * axisY + axisZ * axisZ);
+    if (len < 1e-10) {
+        return Quaternion();  // 返回单位四元数
+    }
+
+    Quaternion q;
+    q.w = cosHalf;
+    q.x = (axisX / len) * sinHalf;
+    q.y = (axisY / len) * sinHalf;
+    q.z = (axisZ / len) * sinHalf;
+    return q;
+}
+
+Quaternion Quaternion::fromAxisAngle(const double axis[3], double angle) {
+    return fromAxisAngle(axis[0], axis[1], axis[2], angle);
+}
+
+// 转换为欧拉角
+void Quaternion::toEuler(double& roll, double& pitch, double& yaw) const {
+    // roll (x-axis rotation)
+    double sinr_cosp = 2 * (w * x + y * z);
+    double cosr_cosp = 1 - 2 * (x * x + y * y);
+    roll = std::atan2(sinr_cosp, cosr_cosp);
+
+    // pitch (y-axis rotation)
+    double sinp = 2 * (w * y - z * x);
+    if (std::abs(sinp) >= 1) {
+        pitch = std::copysign(Constants::PI / 2, sinp);  // 使用90度如果超出范围
+    } else {
+        pitch = std::asin(sinp);
+    }
+
+    // yaw (z-axis rotation)
+    double siny_cosp = 2 * (w * z + x * y);
+    double cosy_cosp = 1 - 2 * (y * y + z * z);
+    yaw = std::atan2(siny_cosp, cosy_cosp);
+}
+
+AttitudeAngles Quaternion::toEuler() const {
+    AttitudeAngles attitude;
+    toEuler(attitude.roll, attitude.pitch, attitude.yaw);
+    return attitude;
+}
+
+// 四元数归一化
+Quaternion Quaternion::normalized() const {
+    double n = norm();
+    if (n < 1e-10) {
+        return Quaternion();  // 返回单位四元数
+    }
+    return Quaternion(w / n, x / n, y / n, z / n);
+}
+
+// 四元数共轭
+Quaternion Quaternion::conjugate() const {
+    return Quaternion(w, -x, -y, -z);
+}
+
+// 四元数求逆
+Quaternion Quaternion::inverse() const {
+    double n2 = normSquared();
+    if (n2 < 1e-10) {
+        return Quaternion();  // 返回单位四元数
+    }
+    Quaternion conj = conjugate();
+    return Quaternion(conj.w / n2, conj.x / n2, conj.y / n2, conj.z / n2);
+}
+
+// 四元数乘法
+Quaternion Quaternion::operator*(const Quaternion& q) const {
+    return Quaternion(
+        w * q.w - x * q.x - y * q.y - z * q.z,
+        w * q.x + x * q.w + y * q.z - z * q.y,
+        w * q.y - x * q.z + y * q.w + z * q.x,
+        w * q.z + x * q.y - y * q.x + z * q.w
+    );
+}
+
+// 四元数与标量乘法
+Quaternion Quaternion::operator*(double scalar) const {
+    return Quaternion(w * scalar, x * scalar, y * scalar, z * scalar);
+}
+
+// 四元数加法
+Quaternion Quaternion::operator+(const Quaternion& q) const {
+    return Quaternion(w + q.w, x + q.x, y + q.y, z + q.z);
+}
+
+// 计算四元数的模
+double Quaternion::norm() const {
+    return std::sqrt(w * w + x * x + y * y + z * z);
+}
+
+// 计算四元数的模的平方
+double Quaternion::normSquared() const {
+    return w * w + x * x + y * y + z * z;
+}
+
+// 点积
+double Quaternion::dot(const Quaternion& q) const {
+    return w * q.w + x * q.x + y * q.y + z * q.z;
+}
+
+// 球面线性插值 (SLERP)
+Quaternion Quaternion::slerp(const Quaternion& q0, const Quaternion& q1, double t) {
+    // 计算两个四元数之间的夹角余弦值
+    double cosOmega = q0.dot(q1);
+
+    // 如果夹角余弦为负，取反一个四元数以选择最短路径
+    Quaternion q1Temp = q1;
+    if (cosOmega < 0.0) {
+        q1Temp = Quaternion(-q1.w, -q1.x, -q1.y, -q1.z);
+        cosOmega = -cosOmega;
+    }
+
+    // 如果四元数非常接近，使用线性插值
+    if (cosOmega > 0.9999) {
+        return Quaternion(
+            q0.w + t * (q1Temp.w - q0.w),
+            q0.x + t * (q1Temp.x - q0.x),
+            q0.y + t * (q1Temp.y - q0.y),
+            q0.z + t * (q1Temp.z - q0.z)
+        ).normalized();
+    }
+
+    // 计算夹角
+    double omega = std::acos(cosOmega);
+    double sinOmega = std::sin(omega);
+
+    // SLERP公式
+    double scale0 = std::sin((1.0 - t) * omega) / sinOmega;
+    double scale1 = std::sin(t * omega) / sinOmega;
+
+    return Quaternion(
+        scale0 * q0.w + scale1 * q1Temp.w,
+        scale0 * q0.x + scale1 * q1Temp.x,
+        scale0 * q0.y + scale1 * q1Temp.y,
+        scale0 * q0.z + scale1 * q1Temp.z
+    );
+}
+
+// 应用旋转向量
+void Quaternion::rotateVector(double vx, double vy, double vz,
+                              double& rx, double& ry, double& rz) const {
+    // q * v * q^(-1)
+    // 其中 v 作为纯四元数 (0, vx, vy, vz)
+    // 简化公式（假设四元数已归一化）：
+    // v' = v + 2 * cross(q_xyz, cross(q_xyz, v) + q_w * v)
+
+    double ux = x, uy = y, uz = z;
+
+    double crossX = uy * vz - uz * vy;
+    double crossY = uz * vx - ux * vz;
+    double crossZ = ux * vy - uy * vx;
+
+    double tempX = vx + 2.0 * (uy * crossZ - uz * crossY);
+    double tempY = vy + 2.0 * (uz * crossX - ux * crossZ);
+    double tempZ = vz + 2.0 * (ux * crossY - uy * crossX);
+
+    rx = tempX;
+    ry = tempY;
+    rz = tempZ;
+}
+
+// 获取旋转矩阵 (3x3, 行主序)
+void Quaternion::toRotationMatrix(double matrix[3][3]) const {
+    double ww = w * w;
+    double xx = x * x;
+    double yy = y * y;
+    double zz = z * z;
+    double wx = w * x;
+    double wy = w * y;
+    double wz = w * z;
+    double xy = x * y;
+    double xz = x * z;
+    double yz = y * z;
+
+    matrix[0][0] = 1 - 2 * (yy + zz);
+    matrix[0][1] = 2 * (xy - wz);
+    matrix[0][2] = 2 * (xz + wy);
+
+    matrix[1][0] = 2 * (xy + wz);
+    matrix[1][1] = 1 - 2 * (xx + zz);
+    matrix[1][2] = 2 * (yz - wx);
+
+    matrix[2][0] = 2 * (xz - wy);
+    matrix[2][1] = 2 * (yz + wx);
+    matrix[2][2] = 1 - 2 * (xx + yy);
+}
 
 // ============================================================================
 // Parameters 默认参数获取
@@ -27,8 +250,8 @@ Parameters Parameters::getDefault(Type type) {
             params.rollDirection = 1.0;
             break;
         case Type::SPLIT_S:
-            params.targetGForce = 2.0;
-            params.duration = 12.0;
+            params.targetGForce = 4.0;
+            params.duration = 20.0;
             params.rollDirection = 1.0;
             break;
     }
@@ -147,6 +370,17 @@ void LevelTurn::reset() {
 // ============================================================================
 // 筋斗机动：在垂直平面内完成360°圆周运动
 // 飞机从平飞开始（圆的左端），向上拉起，完成一圈回到平飞状态
+// 现代战斗机在筋斗机动中，发动机推力补偿能量损失，速度基本恒定
+// ============================================================================
+
+// 计算筋斗理论完成时间
+double Loop::calculateTheoreticalDuration(double speed, double gForce) {
+    if (gForce <= 1.0 || speed <= 0.0) return 0.0;
+    double radius = (speed * speed) / (Constants::G * (gForce - 1.0));
+    double circumference = 2.0 * M_PI * radius;
+    return circumference / speed;
+}
+
 void Loop::initialize(const Parameters& params) {
     this->params = params;
     currentTime = 0.0;
@@ -162,7 +396,7 @@ void Loop::initialize(const Parameters& params) {
     // 计算筋斗半径（基于过载）
     loopRadius = (initialSpeed * initialSpeed) / (Constants::G * (params.targetGForce - 1.0));
 
-    // 记录初始位置（筋斗起点：圆的左端，平飞状态）
+    // 记录初始位置
     initialLatitude = params.initialPosition.latitude;
     initialLongitude = params.initialPosition.longitude;
     initialAltitude = params.initialPosition.altitude;
@@ -171,6 +405,11 @@ void Loop::initialize(const Parameters& params) {
     loopCenterLatitude = initialLatitude + (loopRadius / Constants::EARTH_RADIUS) * std::cos(initialHeading) * Constants::RAD_TO_DEG;
     loopCenterLongitude = initialLongitude + (loopRadius / Constants::EARTH_RADIUS) * std::sin(initialHeading) * Constants::RAD_TO_DEG;
     loopCenterAltitude = initialAltitude;
+
+    // 自动计算完成时间
+    if (params.autoCalculateDuration) {
+        const_cast<Parameters&>(params).duration = calculateTheoreticalDuration(initialSpeed, params.targetGForce);
+    }
 }
 
 void Loop::update(double currentTime, double dt,
@@ -179,28 +418,17 @@ void Loop::update(double currentTime, double dt,
                   AttitudeAngles& attitude) {
     if (!isActive(currentTime)) return;
 
-    this->currentTime = currentTime;
     double maneuverTime = currentTime - params.startTime;
+    this->currentTime = currentTime;
     double progress = maneuverTime / params.duration;
 
-    // 计算当前过载
+    // 计算当前过载（平滑过渡）
     double targetG = 1.0 + (params.targetGForce - 1.0) * std::min(progress * 3.0, 1.0);
     applyGForceConstraint(targetG);
     currentGForce = targetG;
 
-    // 筋斗角度：从 3π/2 开始（圆的左端，平飞），逆时针旋转到 3π/2 + 2π
+    // 当前筋斗角度（从3π/2开始，转2π完成一圈）
     double loopAngle = 3.0 * M_PI / 2.0 + 2.0 * M_PI * progress;
-
-    // 筋斗是垂直平面内的圆周运动
-    // 圆心在 loopCenterLatitude/Longitude/Altitude
-    // 圆周上点的位置（相对于圆心）：
-    //   水平方向：R * cos(loopAngle)
-    //   垂直方向：R * sin(loopAngle)
-    //
-    // loopAngle = 3π/2: 水平位移=0, 垂直位移=-R  （起点，平飞）
-    // loopAngle = 0:     水平位移=R, 垂直位移=0   （最高点，平飞）
-    // loopAngle = π/2:   水平位移=0, 垂直位移=R  （最低点，平飞）
-    // loopAngle = 3π/2: 水平位移=0, 垂直位移=-R  （完成一圈，回到起点）
 
     // 计算相对于圆心的位移
     double horizontalOffset = loopRadius * std::cos(loopAngle);
@@ -215,14 +443,6 @@ void Loop::update(double currentTime, double dt,
     position.altitude = loopCenterAltitude + verticalOffset;
 
     // 速度沿圆周切线方向
-    //   水平速度 = -initialSpeed * sin(loopAngle)
-    //   垂直速度 = initialSpeed * cos(loopAngle)
-    //
-    // loopAngle = 3π/2: 水平速度=max, 垂直速度=0    （平飞，开始向上拉起）
-    // loopAngle = 0:     水平速度=0, 垂直速度=max  （最高点，垂直向上）
-    // loopAngle = π/2:   水平速度=-max, 垂直速度=0  （平飞，开始俯冲）
-    // loopAngle = π:     水平速度=0, 垂直速度=-max （最低点，垂直向下）
-
     double horizontalSpeed = -initialSpeed * std::sin(loopAngle);
     double verticalSpeed = initialSpeed * std::cos(loopAngle);
 
@@ -234,18 +454,13 @@ void Loop::update(double currentTime, double dt,
     attitude.yaw = initialHeading;  // 航向保持不变
 
     // 俯仰角：飞机速度方向与水平面的夹角
-    //   loopAngle = 3π/2: 俯仰角=0°   （平飞）
-    //   loopAngle = 0:     俯仰角=90°  （垂直向上）
-    //   loopAngle = π/2:   俯仰角=0°   （平飞）
-    //   loopAngle = π:     俯仰角=-90° （垂直向下）
     double pitchAngle = loopAngle - 3.0 * M_PI / 2.0;
     // 规范化到 -π 到 π
     while (pitchAngle > M_PI) pitchAngle -= 2 * M_PI;
     while (pitchAngle < -M_PI) pitchAngle += 2 * M_PI;
     attitude.pitch = pitchAngle;
 
-    // 滚转角：保持0（筋斗时机翼始终水平）
-    attitude.roll = 0.0;
+    attitude.roll = 0.0;  // 筋斗时机翼始终水平
 }
 
 void Loop::reset() {
@@ -316,7 +531,7 @@ void Roll::reset() {
 }
 
 // ============================================================================
-// SplitS 模型实现
+// SplitS 模型实现 - 使用四元数进行姿态解算
 // ============================================================================
 // 半滚倒转 = 滚转180° + 半筋斗向下
 // 1. 滚转阶段：飞机平飞，滚转180°进入倒飞状态
@@ -325,6 +540,7 @@ void SplitS::initialize(const Parameters& params) {
     this->params = params;
     currentTime = 0.0;
     currentGForce = 1.0;
+    currentPhase = ROLL_PHASE;
 
     // 记录初始状态
     initialYaw = std::atan2(params.initialVelocity.east, params.initialVelocity.north);
@@ -339,14 +555,18 @@ void SplitS::initialize(const Parameters& params) {
     initialAltitude = params.initialPosition.altitude;
 
     // 计算各阶段参数
-    // 滚转阶段：快速滚转180°
     rollDuration = 2.0;  // 2秒完成滚转
-    rollRate = M_PI * params.rollDirection / rollDuration;  // 180度 / 2秒
-
-    // 半筋斗阶段：在倒飞状态下完成半圆
     pitchDuration = params.duration - rollDuration;
-    // 计算半筋斗半径（基于过载）
     loopRadius = (initialSpeed * initialSpeed) / (Constants::G * (params.targetGForce - 1.0));
+
+    // 初始化四元数为单位四元数（正飞状态）
+    currentQuaternion = Quaternion();
+
+    // 计算滚转结束时的姿态四元数（倒飞状态，roll = 180°，半筋斗起点）
+    rollEndQuaternion = Quaternion::fromEuler(M_PI * params.rollDirection, 0.0, initialYaw);
+
+    // 计算半筋斗结束时的姿态四元数（正飞状态，roll = 0°，航向反转180°）
+    halfLoopEndQuaternion = Quaternion::fromEuler(0.0, 0.0, initialYaw + M_PI);
 }
 
 void SplitS::update(double currentTime, double dt,
@@ -363,11 +583,12 @@ void SplitS::update(double currentTime, double dt,
         currentPhase = ROLL_PHASE;
         currentGForce = 1.0;
 
-        // 滚转角度：从0到180度（π）
-        double rollAngle = rollRate * maneuverTime;
-        // 规范化滚转角到 -π 到 π
-        if (rollAngle > M_PI) rollAngle -= 2 * M_PI;
-        if (rollAngle < -M_PI) rollAngle += 2 * M_PI;
+        // 滚转进度
+        double rollProgress = maneuverTime / rollDuration;
+
+        // 使用SLERP插值计算当前姿态（从正飞到倒飞）
+        Quaternion startQuaternion = Quaternion::fromEuler(0.0, 0.0, initialYaw);
+        currentQuaternion = Quaternion::slerp(startQuaternion, rollEndQuaternion, rollProgress);
 
         // 沿直线飞行，高度不变
         double distance = initialSpeed * maneuverTime;
@@ -381,11 +602,6 @@ void SplitS::update(double currentTime, double dt,
         velocity.east = initialSpeed * std::sin(initialYaw);
         velocity.up = 0.0;
 
-        // 姿态：滚转，俯仰和航向不变
-        attitude.yaw = initialYaw;
-        attitude.pitch = 0.0;
-        attitude.roll = rollAngle;
-
         // 记录滚转结束时的位置，作为半筋斗阶段的起点
         rollEndLatitude = position.latitude;
         rollEndLongitude = position.longitude;
@@ -397,24 +613,27 @@ void SplitS::update(double currentTime, double dt,
         double pitchPhaseTime = maneuverTime - rollDuration;
         double pitchProgress = pitchPhaseTime / pitchDuration;
 
-        // 半筋斗角度：从 π/2（圆的顶端，倒飞平飞）顺时针到 -π/2（圆的底端，正飞平飞）
-        // 这个半圆轨迹使得飞机从倒飞状态通过下半圆回到正飞状态
-        double loopAngle = M_PI / 2.0 - M_PI * pitchProgress;
-
         // 过载：逐渐增加到目标过载
         double targetG = 1.0 + (params.targetGForce - 1.0) * std::min(pitchProgress * 3.0, 1.0);
         applyGForceConstraint(targetG);
         currentGForce = targetG;
 
-        // Split-S 半筋斗几何：
-        // 圆心在起点下方 R 处（飞机在圆心上方 R 处，倒飞平飞）
-        // 从 π/2 开始（顶端，倒飞），顺时针到 -π/2（底端，正飞）
+        // ========== SplitS 几何原理 ==========
+        // 飞机在垂直平面（由初始航向定义）内完成半圆
+        // 圆心在滚转结束点下方 R 处
         //
-        // loopAngle = π/2:  水平偏移=0,   垂直偏移=R   （起点，圆心上方R，倒飞平飞）
-        // loopAngle = 0:    水平偏移=R,   垂直偏移=0   （最低点，圆心处，垂直向下）
-        // loopAngle = -π/2: 水平偏移=0,   垂直偏移=-R  （终点，圆心下方R，正飞平飞）
+        // 角度定义（loopAngle）：从 π/2（起点）到 -π/2（终点），顺时针
         //
-        // 最终效果：高度损失 = 2R，航向反转 180°
+        // loopAngle  | 水平偏移      | 垂直偏移      | 速度方向        | 飞机状态
+        // -----------|--------------|--------------|-----------------|----------
+        // π/2 (起点) | 0 (前)       | +R (最高)    | 水平向前       | 倒飞平飞
+        // 0          | +R (下)      | 0 (最低)    | 垂直向下       | 倒飞俯冲
+        // -π/2 (终点)| 0 (后)       | -R (最低)   | 水平向后       | 正飞平飞
+        //
+        // 关键：航向反转180°是因为速度方向从向前变成向后
+        //       但位置计算始终使用初始航向（在垂直平面内运动）
+
+        double loopAngle = M_PI / 2.0 - M_PI * pitchProgress;
 
         // 计算相对于圆心的偏移
         double horizontalOffset = loopRadius * std::cos(loopAngle);
@@ -423,65 +642,39 @@ void SplitS::update(double currentTime, double dt,
         // 圆心位置（在滚转结束点下方 R 处）
         double loopCenterAltitude = rollEndAltitude - loopRadius;
 
-        // 位置计算
-        // 水平偏移转换为经纬度（沿新航向）
+        // ========== 位置计算 ==========
+        // 关键：位置在垂直平面内变化，使用初始航向（不变）
         double horizontalDeg = horizontalOffset / Constants::EARTH_RADIUS * Constants::RAD_TO_DEG;
-
-        // 新航向 = 初始航向 + 180°（反向）
-        double reverseHeading = initialYaw + M_PI;
-        if (reverseHeading > M_PI) reverseHeading -= 2 * M_PI;
-        if (reverseHeading < -M_PI) reverseHeading += 2 * M_PI;
-
-        // 位置 = 滚转结束点 + 水平偏移（沿反向航向）+ 高度偏移
-        position.latitude = rollEndLatitude + horizontalDeg * std::cos(reverseHeading);
-        position.longitude = rollEndLongitude + horizontalDeg * std::sin(reverseHeading);
+        position.latitude = rollEndLatitude + horizontalDeg * std::cos(initialYaw);
+        position.longitude = rollEndLongitude + horizontalDeg * std::sin(initialYaw);
         position.altitude = loopCenterAltitude + verticalOffset;
 
-        // 速度沿半圆切线方向（顺时针）
-        //   水平速度 = initialSpeed * sin(loopAngle)
-        //   垂直速度 = -initialSpeed * cos(loopAngle)
-        //
-        // loopAngle = π/2:  水平速度=max,    垂直速度=0    （起点，倒飞平飞，向前）
-        // loopAngle = 0:    水平速度=0,     垂直速度=max  （最低点，垂直向下）
-        // loopAngle = -π/2: 水平速度=-max,  垂直速度=0    （终点，正飞平飞，向前）
-        //
-        // 注意：终点的水平速度为负，但这是相对于切线方向的。
-        // 由于我们使用 reverseHeading，负的水平速度实际表示正向飞行
-
+        // ========== 速度计算 ==========
+        // 速度沿半圆切线方向
         double horizontalSpeed = initialSpeed * std::sin(loopAngle);
-        double verticalSpeed = -initialSpeed * std::cos(loopAngle);
+        double verticalSpeed = initialSpeed * std::cos(loopAngle);
 
-        // 使用原始航向计算速度分量（因为反向已经体现在水平速度的符号中）
+        // 速度方向：水平分量使用初始航向
+        // 当 horizontalSpeed 从 +V 变到 -V 时，自然实现航向反转
         velocity.north = horizontalSpeed * std::cos(initialYaw);
         velocity.east = horizontalSpeed * std::sin(initialYaw);
         velocity.up = verticalSpeed;
 
-        // 姿态角更新
-        attitude.yaw = reverseHeading;  // 航向反向
-
-        // Split-S 的姿态角：
-        // 在半筋斗阶段，飞机保持倒飞状态（roll=180°），只是pitch角变化
-        // 从倒飞平飞（pitch=π）→ 垂直向下（pitch=3π/2或-π/2）→ 正飞平飞（pitch=0或2π）
+        // ========== 姿态计算（使用四元数SLERP插值）==========
+        // 关键原理：使用SLERP在半筋斗的两个端点姿态之间进行平滑插值
+        // 这样可以避免欧拉角的万向节锁问题和符号反转问题
         //
-        // 使用欧拉角表示：pitch 从 π 到 0（经过 3π/2）
-        double pitchAngle = M_PI - M_PI * pitchProgress;  // π → 0
-        // 规范化到 -π 到 π
-        while (pitchAngle > M_PI) pitchAngle -= 2 * M_PI;
-        while (pitchAngle < -M_PI) pitchAngle += 2 * M_PI;
-        attitude.pitch = pitchAngle;
-
-        // 滚转角：在整个半筋斗阶段保持倒飞状态（180°）
-        // 在终点时，pitch已经到了0，roll也应该回到0表示正飞
-        // 但实际上，我们用pitch=0来表示"完成了360°的俯仰旋转"
-        // 所以roll应该保持180°，或者逐渐过渡到0
+        // 半筋斗起点姿态（rollEndQuaternion）：倒飞(roll=180°), 平飞(pitch=0°), 初始航向
+        // 半筋斗终点姿态（halfLoopEndQuaternion）：正飞(roll=0°), 平飞(pitch=0°), 反向航向(+180°)
         //
-        // 简化处理：roll随pitchProgress线性变化，从180°到0°
-        double rollAngle = M_PI * params.rollDirection * (1.0 - pitchProgress);
-        // 规范化到 -π 到 π
-        if (rollAngle > M_PI) rollAngle -= 2 * M_PI;
-        if (rollAngle < -M_PI) rollAngle += 2 * M_PI;
-        attitude.roll = rollAngle;
+        // SLERP会自动处理中间所有姿态，包括最底点的俯冲姿态
+
+        // 使用SLERP计算当前姿态（插值因子从0到1）
+        currentQuaternion = Quaternion::slerp(rollEndQuaternion, halfLoopEndQuaternion, pitchProgress);
     }
+
+    // 将四元数转换为欧拉角输出
+    attitude = currentQuaternion.toEuler();
 }
 
 void SplitS::reset() {
@@ -489,6 +682,7 @@ void SplitS::reset() {
     currentGForce = 1.0;
     currentPhase = ROLL_PHASE;
     phaseTime = 0.0;
+    currentQuaternion = Quaternion();  // 重置为单位四元数
 }
 
 // ============================================================================

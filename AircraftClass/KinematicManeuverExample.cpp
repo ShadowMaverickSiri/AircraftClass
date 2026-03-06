@@ -6,6 +6,7 @@
 
 #define _USE_MATH_DEFINES
 #include "KinematicManeuverSystem.h"
+#include "AircraftModelLibrary.h"
 #include "FighterJet.h"
 #include "TacviewTelemetry.h"
 #include <iostream>
@@ -17,6 +18,8 @@
 #include <sstream>
 #include <cmath>
 #include <windows.h>
+#include<vector>
+#include<array>
 
 using namespace KinematicManeuver;
 
@@ -53,10 +56,18 @@ public:
     std::string createObjectUpdate(const GeoPosition& pos, const Velocity3& vel, const AttitudeAngles& att) {
         std::ostringstream oss;
 
-        // 转换角度为度数
+        // 转换角度为度数，并检查数值有效性
         double rollDeg = att.roll * 180.0 / M_PI;
         double pitchDeg = att.pitch * 180.0 / M_PI;
         double yawDeg = att.yaw * 180.0 / M_PI;
+
+        // 检查并修复无效值（NaN 或 Inf）
+        if (!std::isfinite(rollDeg)) rollDeg = 0.0;
+        if (!std::isfinite(pitchDeg)) pitchDeg = 0.0;
+        if (!std::isfinite(yawDeg)) yawDeg = 0.0;
+        if (!std::isfinite(pos.longitude)) return "";  // 无效数据，跳过
+        if (!std::isfinite(pos.latitude)) return "";
+        if (!std::isfinite(pos.altitude)) return "";
 
         oss << objectIDStr_ << ",T="
             << std::fixed << std::setprecision(6)
@@ -114,6 +125,20 @@ void printState(double time, const GeoPosition& pos, const Velocity3& vel,
               << "Pitch=" << std::setw(5) << (att.pitch * 180.0 / M_PI) << " | "
               << "Roll=" << std::setw(5) << (att.roll * 180.0 / M_PI) << " | "
               << "Yaw=" << std::setw(5) << (att.yaw * 180.0 / M_PI) << "\n";
+}
+
+// 带速度信息的打印函数（用于筋斗机动）
+void printStateWithSpeed(double time, const GeoPosition& pos, const Velocity3& vel,
+                         const AttitudeAngles& att, double gForce, double currentSpeed) {
+    // 计算总速度
+    double totalSpeed = std::sqrt(vel.north * vel.north + vel.east * vel.east + vel.up * vel.up);
+
+    std::cout << std::fixed << std::setprecision(2);
+    std::cout << "T=" << std::setw(5) << time << "s | "
+              << "Alt=" << std::setw(7) << pos.altitude << "m | "
+              << "Speed=" << std::setw(6) << totalSpeed << "m/s | "
+              << "G=" << std::setw(4) << gForce << " | "
+              << "Pitch=" << std::setw(5) << (att.pitch * 180.0 / M_PI) << "\n";
 }
 
 // CSV 输出记录
@@ -245,31 +270,39 @@ void exampleLevelTurn() {
 }
 
 // ============================================================================
-// 示例2：筋斗机动（带 Tacview 输出）
+// 示例2：筋斗机动（带 Tacview 输出）- 真实物理模型
 // ============================================================================
 void exampleLoop() {
-    printHeader("示例2：筋斗机动 (Loop) + Tacview遥测");
+    printHeader("示例2：筋斗机动 (Loop) + 真实物理模拟");
 
     TacviewTelemetry telemetry;
     telemetry.start(42674);
 
+	std::array<double, 3>LLA0{ 116.0, 39.0, 8000 };  //机动起始位置
+	std::array<double, 3>VN0{ 300, 0, 0 };  //机动起始北天东速度
+	double V0 = std::sqrt(VN0[0] * VN0[0] + VN0[1] * VN0[1] + VN0[2] * VN0[2]); //计算初始合速度
+	
+
     FighterJet fighter(FighterType::F22_RAPTOR,
-                      {116.0, 39.0, 8000},
-                      {300, 0, 0});
+                      { LLA0[0], LLA0[1], LLA0[2] },
+                      { VN0[0], VN0[1], VN0[2] });
 
     auto params = Factory::getDefaultParams(Type::LOOP);
     params.initialPosition = fighter.position;
     params.initialVelocity = fighter.velocity;
-    params.targetGForce = 4.0;
-    params.duration = 25.0;
+    params.targetGForce = 8.0;
+
+    // 根据速度和过载计算理论完成时间和筋斗半径
+    double theoreticalDuration = Loop::calculateTheoreticalDuration(V0, params.targetGForce);
+    double loopRadius = (V0 * V0) / (Constants::G * (params.targetGForce - 1.0));
+    params.duration = theoreticalDuration;  // 使用计算的理论时间
 
     auto maneuver = Factory::create(Type::LOOP);
     maneuver->initialize(params);
 
     TacviewExporter exporter;
-    exporter.setObjectID(0x3EA);  // 不同对象ID
+    exporter.setObjectID(0x3EA);
 
-    // 启用日志记录
     telemetry.enableLogging("E:\\MyCode\\AircraftClass-main\\x64\\Debug\\telemetry_log.acmi");
 
     std::cout << "\n[Tacview] 请按以下步骤连接 Tacview:\n";
@@ -278,64 +311,55 @@ void exampleLoop() {
     std::cout << "  3. 选择 127.0.0.1:42674\n";
     std::cout << "\n等待 Tacview 连接...\n";
 
-    // 等待 Tacview 连接
     while (!telemetry.hasClients()) {
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
     std::cout << "[Tacview] 已连接! 发送初始化数据...\n\n";
 
-    // Tacview 连接后，发送初始化数据
     std::this_thread::sleep_for(std::chrono::milliseconds(500));
 
-    // 发送 ACMI 文件头
     telemetry.broadcastLine(exporter.initializeHeader());
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
-    // 发送初始时间帧
     std::string timeFrame0 = exporter.createTimeFrame(0.0);
     telemetry.broadcastLine(timeFrame0);
-    std::cout << "[发送] " << timeFrame0 << "\n";
 
-    // 发送对象定义（包含初始位置）
     std::ostringstream initLine;
-    initLine << exporter.createAircraftObject("F-22", "Blue")
+    initLine << exporter.createAircraftObject("F-22", "Red")
              << ",T=" << std::fixed << std::setprecision(6)
              << fighter.position.longitude << "|"
              << fighter.position.latitude << "|"
              << std::fixed << std::setprecision(1)
              << fighter.position.altitude;
-    std::string initStr = initLine.str();
-    telemetry.broadcastLine(initStr);
-    std::cout << "[发送] " << initStr << "\n";
+    telemetry.broadcastLine(initLine.str());
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
     std::cout << "\n机型: F-22 Raptor\n";
-    std::cout << "机动参数: " << params.targetGForce << "G 筋斗, " << params.duration << "秒\n\n";
+    std::cout << "初始速度: "<< V0 << " m/s\n";
+    std::cout << "目标过载: " << params.targetGForce << "G\n";
+    std::cout << "筋斗半径: " << std::fixed << std::setprecision(1) << loopRadius << " m\n";
+    std::cout << "理论完成时间: " << std::fixed << std::setprecision(2) << theoreticalDuration << " s\n";
 
-    std::cout << "时间 | 经度 | 纬度 | 高度 | 过载 | 俯仰 | 滚转 | 偏航\n";
-    std::cout << "-----------------------------------------------------------\n";
+    std::cout << "时间 | 高度 | 速度 | 过载 | 俯仰角\n";
+    std::cout << "--------------------------------------------\n";
 
     const double dt = 0.1;
-    bool firstPrint = true;
 
-    for (double t = dt; t <= params.duration; t += dt) {
+    for (double t = dt; t <= params.duration + 10.0; t += dt) {
         maneuver->update(t, dt, fighter.position, fighter.velocity, fighter.attitude);
-        printState(t, fighter.position, fighter.velocity, fighter.attitude, maneuver->getCurrentGForce());
 
-        // 发送时间帧和对象更新
+        // 每0.5秒打印一次
+        if (static_cast<int>(t * 10) % 5 == 0) {
+            printStateWithSpeed(t, fighter.position, fighter.velocity, fighter.attitude,
+                               maneuver->getCurrentGForce(), 300.0);
+        }
+
         std::string timeFrame = exporter.createTimeFrame(t);
         std::string objUpdate = exporter.createObjectUpdate(fighter.position, fighter.velocity, fighter.attitude);
         telemetry.broadcastLine(timeFrame);
         telemetry.broadcastLine(objUpdate);
 
-        if (firstPrint) {
-            std::cout << "\n[调试] 第一次发送的数据:\n";
-            std::cout << "  " << timeFrame << "\n";
-            std::cout << "  " << objUpdate << "\n\n";
-            firstPrint = false;
-        }
-
-        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        std::this_thread::sleep_for(std::chrono::milliseconds(30));
     }
 
     std::cout << "\n机动完成! 您可以在 Tacview 中回放查看轨迹。\n";
@@ -360,7 +384,7 @@ void exampleSplitS() {
     auto params = Factory::getDefaultParams(Type::SPLIT_S);
     params.initialPosition = fighter.position;
     params.initialVelocity = fighter.velocity;
-    params.duration = 30.;
+    params.duration = 25.;  // 2秒滚转 + 23秒半筋斗（4g过载下约需23秒）
     params.rollDirection = 1.0;
 
     auto maneuver = Factory::create(Type::SPLIT_S);
@@ -420,7 +444,7 @@ void exampleSplitS() {
     std::cout << "时间 | 经度 | 纬度 | 高度 | 过载 | 俯仰 | 滚转 | 偏航\n";
     std::cout << "-----------------------------------------------------------\n";
 
-    for (double t = dt; t <= params.duration; t += dt) {
+    for (double t = dt; t <= params.duration+10.; t += dt) {
         maneuver->update(t, dt, fighter.position, fighter.velocity, fighter.attitude);
 
         // 记录数据
