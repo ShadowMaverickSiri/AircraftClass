@@ -254,6 +254,49 @@ Parameters Parameters::getDefault(Type type) {
             params.duration = 20.0;
             params.rollDirection = 1.0;
             break;
+        case Type::CONSTANT_TURN:
+            params.targetGForce = 3.0;
+            params.duration = 30.0;
+            params.turnDirection = 1.0;
+            params.numCircles = 2;
+            break;
+        case Type::RACETRACK_PATTERN:
+            params.targetGForce = 3.0;
+            params.duration = 60.0;
+            params.turnDirection = 1.0;
+            params.straightLength = 5000.0;
+            params.turnRadius = 1000.0;
+            params.numLaps = 1;
+            break;
+        case Type::EIGHT_PATTERN:
+            params.targetGForce = 3.0;
+            params.duration = 60.0;
+            params.turnDirection = 1.0;
+            params.patternWidth = 2000.0;
+            params.patternHeight = 1000.0;
+            break;
+        case Type::IMMELMAN_ESCAPE:
+            params.targetGForce = 4.0;
+            params.duration = 30.0;
+            params.turnDirection = 1.0;
+            params.targetAltitude = 5000.0;
+            params.descentRate = 50.0;
+            params.maxTurnRate = 10.0;
+            break;
+        case Type::L_PATTERN:
+            params.targetGForce = 3.0;
+            params.duration = 30.0;
+            params.turnDirection = 1.0;
+            params.leg1Distance = 5000.0;
+            params.turnAngle = 90.0;
+            break;
+        case Type::S_PATTERN:
+            params.targetGForce = 3.0;
+            params.duration = 40.0;
+            params.turnDirection = 1.0;
+            params.sTurnRadius = 1000.0;
+            params.numTurns = 2;
+            break;
     }
 
     return params;
@@ -686,6 +729,747 @@ void SplitS::reset() {
 }
 
 // ============================================================================
+// ConstantTurn 定速定高盘旋模型实现
+// ============================================================================
+// 定速定高盘旋：水平圆周运动，支持指定圈数
+// 类似LevelTurn，但可以指定完成圈数
+void ConstantTurn::initialize(const Parameters& params) {
+    this->params = params;
+    currentTime = 0.0;
+    currentGForce = 1.0;
+
+    // 计算初始航向角
+    initialHeading = std::atan2(params.initialVelocity.east, params.initialVelocity.north);
+
+    // 计算初始速度大小
+    double initialSpeed = std::sqrt(
+        params.initialVelocity.north * params.initialVelocity.north +
+        params.initialVelocity.east * params.initialVelocity.east
+    );
+
+    // 计算转弯参数
+    turnRadius = calculateTurnRadius(initialSpeed, params.targetGForce);
+    turnRate = calculateTurnRate(initialSpeed, params.targetGForce) * params.turnDirection;
+
+    // 计算转弯中心点
+    double perpendicularAngle = initialHeading + (params.turnDirection > 0 ? M_PI/2 : -M_PI/2);
+    turnCenterNorth = params.initialPosition.latitude +
+        turnRadius * std::cos(perpendicularAngle) / Constants::EARTH_RADIUS * Constants::RAD_TO_DEG;
+    turnCenterEast = params.initialPosition.longitude +
+        turnRadius * std::sin(perpendicularAngle) / (Constants::EARTH_RADIUS *
+        std::cos(params.initialPosition.latitude * Constants::DEG_TO_RAD)) * Constants::RAD_TO_DEG;
+
+    // 自动计算持续时间（基于圈数）
+    if (params.autoCalculateDuration) {
+        double circleDuration = (2.0 * M_PI) / std::abs(turnRate);
+        const_cast<Parameters&>(params).duration = circleDuration * params.numCircles;
+    }
+}
+
+void ConstantTurn::update(double currentTime, double dt,
+                          GeoPosition& position,
+                          Velocity3& velocity,
+                          AttitudeAngles& attitude) {
+    if (!isActive(currentTime)) return;
+
+    this->currentTime = currentTime;
+    double maneuverTime = currentTime - params.startTime;
+    double progress = maneuverTime / params.duration;
+
+    // 计算当前过载（平滑过渡）
+    double targetG = 1.0 + (params.targetGForce - 1.0) * std::min(progress * 3.0, 1.0);
+    applyGForceConstraint(targetG);
+    currentGForce = targetG;
+
+    // 计算当前航向角
+    double currentHeading = initialHeading + turnRate * maneuverTime;
+
+    // 计算当前速度大小（保持恒定）
+    double speed = std::sqrt(
+        params.initialVelocity.north * params.initialVelocity.north +
+        params.initialVelocity.east * params.initialVelocity.east
+    );
+
+    // 更新速度（北天东坐标系）
+    velocity.north = speed * std::cos(currentHeading);
+    velocity.east = speed * std::sin(currentHeading);
+    velocity.up = 0.0;
+
+    // 更新姿态 - 对航向角进行归一化到 [-π, π]
+    attitude.yaw = currentHeading;
+    while (attitude.yaw > M_PI) attitude.yaw -= 2.0 * M_PI;
+    while (attitude.yaw < -M_PI) attitude.yaw += 2.0 * M_PI;
+
+    attitude.pitch = 0.0;
+    // 滚转角：正值表示右转时机翼向右倾斜，负值表示左转
+    double bankAngle = std::atan(speed * speed / (Constants::G * turnRadius));
+    attitude.roll = bankAngle * params.turnDirection;
+
+    // 更新位置
+    updatePositionFromVelocity(dt, position, velocity);
+}
+
+void ConstantTurn::reset() {
+    currentTime = 0.0;
+    currentGForce = 1.0;
+}
+
+// ============================================================================
+// RacetrackPattern 跑道型盘旋模型实现
+// ============================================================================
+// 跑道型盘旋：矩形路径 = 直道段 + 180°转弯 + 直道段 + 180°转弯
+void RacetrackPattern::initialize(const Parameters& params) {
+    this->params = params;
+    currentTime = 0.0;
+    currentGForce = 1.0;
+    currentPhase = LEG1_STRAIGHT;
+    currentLap = 0;
+
+    // 计算初始航向角和速度
+    initialHeading = std::atan2(params.initialVelocity.east, params.initialVelocity.north);
+    initialSpeed = std::sqrt(
+        params.initialVelocity.north * params.initialVelocity.north +
+        params.initialVelocity.east * params.initialVelocity.east
+    );
+
+    // 计算转弯参数
+    if (params.turnRadius > 0) {
+        turnRadius = params.turnRadius;
+    } else {
+        turnRadius = calculateTurnRadius(initialSpeed, params.targetGForce);
+    }
+    turnRate = calculateTurnRate(initialSpeed, params.targetGForce);
+
+    // 计算各阶段持续时间
+    double straightDuration = straightLength / initialSpeed;
+    double turnDuration = (M_PI) / (turnRate * params.turnDirection);  // 180度转弯
+    double totalLapDuration = 2.0 * straightDuration + 2.0 * turnDuration;
+
+    t1 = straightDuration;
+    t2 = t1 + turnDuration;
+    t3 = t2 + straightDuration;
+    t4 = t3 + turnDuration;
+
+    // 自动计算总持续时间
+    if (params.autoCalculateDuration) {
+        const_cast<Parameters&>(params).duration = totalLapDuration * params.numLaps;
+    }
+
+    // 计算第一个转弯圆心（在第一段直道终点左侧/右侧）
+    double turn1Angle = initialHeading + (params.turnDirection > 0 ? M_PI/2 : -M_PI/2);
+    turn1CenterNorth = params.initialPosition.latitude +
+        turnRadius * std::cos(turn1Angle) / Constants::EARTH_RADIUS * Constants::RAD_TO_DEG;
+    turn1CenterEast = params.initialPosition.longitude +
+        turnRadius * std::sin(turn1Angle) / (Constants::EARTH_RADIUS *
+        std::cos(params.initialPosition.latitude * Constants::DEG_TO_RAD)) * Constants::RAD_TO_DEG;
+
+    // 计算第二个转弯圆心（在第二段直道终点左侧/右侧）
+    turn2CenterNorth = turn1CenterNorth;
+    turn2CenterEast = turn1CenterEast;
+}
+
+void RacetrackPattern::update(double currentTime, double dt,
+                              GeoPosition& position,
+                              Velocity3& velocity,
+                              AttitudeAngles& attitude) {
+    if (!isActive(currentTime)) return;
+
+    this->currentTime = currentTime;
+    double maneuverTime = currentTime - params.startTime;
+    double progress = maneuverTime / params.duration;
+
+    // 计算当前过载（平滑过渡）
+    double targetG = 1.0;
+    if (maneuverTime < t1 || (maneuverTime > t2 && maneuverTime < t3)) {
+        targetG = 1.0;  // 直道阶段
+    } else {
+        targetG = params.targetGForce;  // 转弯阶段
+    }
+    applyGForceConstraint(targetG);
+    currentGForce = targetG;
+
+    // 计算当前在哪个圈
+    int lap = static_cast<int>(maneuverTime / t4);
+    double timeInLap = maneuverTime - lap * t4;
+
+    double currentHeading = initialHeading;
+
+    if (timeInLap <= t1) {
+        // LEG1_STRAIGHT: 第一段直道
+        currentPhase = LEG1_STRAIGHT;
+        currentHeading = initialHeading;
+        attitude.roll = 0.0;
+    } else if (timeInLap <= t2) {
+        // LEG2_TURN: 第一个180度转弯
+        currentPhase = LEG2_TURN;
+        double turnTime = timeInLap - t1;
+        double turnAngle = turnRate * params.turnDirection * turnTime;
+        currentHeading = initialHeading + turnAngle;
+        attitude.roll = std::atan2(initialSpeed * initialSpeed, Constants::G * turnRadius) * params.turnDirection;
+    } else if (timeInLap <= t3) {
+        // LEG3_STRAIGHT: 第二段直道（反向）
+        currentPhase = LEG3_STRAIGHT;
+        currentHeading = initialHeading + M_PI * params.turnDirection;
+        attitude.roll = 0.0;
+    } else {
+        // LEG4_TURN: 第二个180度转弯
+        currentPhase = LEG4_TURN;
+        double turnTime = timeInLap - t3;
+        double turnAngle = turnRate * params.turnDirection * turnTime;
+        currentHeading = initialHeading + M_PI * params.turnDirection + turnAngle;
+        attitude.roll = std::atan2(initialSpeed * initialSpeed, Constants::G * turnRadius) * params.turnDirection;
+    }
+
+    // 更新速度
+    velocity.north = initialSpeed * std::cos(currentHeading);
+    velocity.east = initialSpeed * std::sin(currentHeading);
+    velocity.up = 0.0;
+
+    // 更新姿态 - 对航向角进行归一化
+    attitude.yaw = currentHeading;
+    while (attitude.yaw > M_PI) attitude.yaw -= 2.0 * M_PI;
+    while (attitude.yaw < -M_PI) attitude.yaw += 2.0 * M_PI;
+    attitude.pitch = 0.0;
+
+    // 更新位置
+    updatePositionFromVelocity(dt, position, velocity);
+}
+
+void RacetrackPattern::reset() {
+    currentTime = 0.0;
+    currentGForce = 1.0;
+    currentPhase = LEG1_STRAIGHT;
+    currentLap = 0;
+}
+
+// ============================================================================
+// EightPattern 8字型盘旋模型实现
+// ============================================================================
+// 8字型盘旋：两个相切圆形成的8字形
+void EightPattern::initialize(const Parameters& params) {
+    this->params = params;
+    currentTime = 0.0;
+    currentGForce = 1.0;
+    currentPhase = FIRST_CIRCLE;
+
+    // 计算初始航向角和速度
+    initialHeading = std::atan2(params.initialVelocity.east, params.initialVelocity.north);
+    initialSpeed = std::sqrt(
+        params.initialVelocity.north * params.initialVelocity.north +
+        params.initialVelocity.east * params.initialVelocity.east
+    );
+
+    // 计算转弯半径
+    turnRadius = calculateTurnRadius(initialSpeed, params.targetGForce);
+    turnRate = calculateTurnRate(initialSpeed, params.targetGForce);
+
+    // 计算一个圆的持续时间
+    circleDuration = (2.0 * M_PI) / turnRate;
+
+    // 自动计算总持续时间
+    if (params.autoCalculateDuration) {
+        const_cast<Parameters&>(params).duration = circleDuration * 2.0;  // 两个圆
+    }
+
+    // 计算两个圆的圆心
+    // 第一个圆的圆心在起始点左侧/右侧
+    double angle1 = initialHeading + (params.turnDirection > 0 ? M_PI/2 : -M_PI/2);
+    circle1CenterNorth = params.initialPosition.latitude +
+        turnRadius * std::cos(angle1) / Constants::EARTH_RADIUS * Constants::RAD_TO_DEG;
+    circle1CenterEast = params.initialPosition.longitude +
+        turnRadius * std::sin(angle1) / (Constants::EARTH_RADIUS *
+        std::cos(params.initialPosition.latitude * Constants::DEG_TO_RAD)) * Constants::RAD_TO_DEG;
+
+    // 第二个圆的圆心在第一个圆对面，相切于起始点
+    double angle2 = initialHeading + (params.turnDirection > 0 ? -M_PI/2 : M_PI/2);
+    circle2CenterNorth = params.initialPosition.latitude +
+        turnRadius * std::cos(angle2) / Constants::EARTH_RADIUS * Constants::RAD_TO_DEG;
+    circle2CenterEast = params.initialPosition.longitude +
+        turnRadius * std::sin(angle2) / (Constants::EARTH_RADIUS *
+        std::cos(params.initialPosition.latitude * Constants::DEG_TO_RAD)) * Constants::RAD_TO_DEG;
+}
+
+void EightPattern::update(double currentTime, double dt,
+                          GeoPosition& position,
+                          Velocity3& velocity,
+                          AttitudeAngles& attitude) {
+    if (!isActive(currentTime)) return;
+
+    this->currentTime = currentTime;
+    double maneuverTime = currentTime - params.startTime;
+    double progress = maneuverTime / params.duration;
+
+    // 计算当前过载（平滑过渡）
+    double targetG = 1.0 + (params.targetGForce - 1.0) * std::min(progress * 3.0, 1.0);
+    applyGForceConstraint(targetG);
+    currentGForce = targetG;
+
+    double currentHeading;
+    double currentLat, currentLon;
+
+    if (maneuverTime < circleDuration) {
+        // 第一个圆
+        currentPhase = FIRST_CIRCLE;
+        double angleProgress = maneuverTime / circleDuration;
+        double angle = (3.0 * M_PI / 2.0) + 2.0 * M_PI * angleProgress * params.turnDirection;
+
+        // 相对于第一个圆心的位置
+        double offsetNorth = turnRadius * std::cos(angle);
+        double offsetEast = turnRadius * std::sin(angle);
+
+        currentLat = circle1CenterNorth + offsetNorth / Constants::EARTH_RADIUS * Constants::RAD_TO_DEG;
+        currentLon = circle1CenterEast + offsetEast / (Constants::EARTH_RADIUS *
+            std::cos(currentLat * Constants::DEG_TO_RAD)) * Constants::RAD_TO_DEG;
+
+        // 速度方向（切线方向）
+        double tangentAngle = angle + (params.turnDirection > 0 ? M_PI/2 : -M_PI/2);
+        currentHeading = tangentAngle;
+    } else {
+        // 第二个圆
+        currentPhase = SECOND_CIRCLE;
+        double secondCircleTime = maneuverTime - circleDuration;
+        double angleProgress = secondCircleTime / circleDuration;
+        double angle = (M_PI / 2.0) + 2.0 * M_PI * angleProgress * params.turnDirection;
+
+        // 相对于第二个圆心的位置
+        double offsetNorth = turnRadius * std::cos(angle);
+        double offsetEast = turnRadius * std::sin(angle);
+
+        currentLat = circle2CenterNorth + offsetNorth / Constants::EARTH_RADIUS * Constants::RAD_TO_DEG;
+        currentLon = circle2CenterEast + offsetEast / (Constants::EARTH_RADIUS *
+            std::cos(currentLat * Constants::DEG_TO_RAD)) * Constants::RAD_TO_DEG;
+
+        // 速度方向（切线方向）
+        double tangentAngle = angle + (params.turnDirection > 0 ? M_PI/2 : -M_PI/2);
+        currentHeading = tangentAngle;
+    }
+
+    // 更新位置
+    position.latitude = currentLat;
+    position.longitude = currentLon;
+
+    // 更新速度
+    velocity.north = initialSpeed * std::cos(currentHeading);
+    velocity.east = initialSpeed * std::sin(currentHeading);
+    velocity.up = 0.0;
+
+    // 更新姿态 - 对航向角进行归一化
+    attitude.yaw = currentHeading;
+    while (attitude.yaw > M_PI) attitude.yaw -= 2.0 * M_PI;
+    while (attitude.yaw < -M_PI) attitude.yaw += 2.0 * M_PI;
+    attitude.pitch = 0.0;
+    attitude.roll = std::atan(initialSpeed * initialSpeed / (Constants::G * turnRadius)) * params.turnDirection;
+}
+
+void EightPattern::reset() {
+    currentTime = 0.0;
+    currentGForce = 1.0;
+    currentPhase = FIRST_CIRCLE;
+}
+
+// ============================================================================
+// ImmelmanEscape 置尾降高逃逸模型实现
+// ============================================================================
+// 置尾降高逃逸：最大速率掉转机头180度 + 下降至目标高度 + 改平
+void ImmelmanEscape::initialize(const Parameters& params) {
+    this->params = params;
+    currentTime = 0.0;
+    currentGForce = 1.0;
+    currentPhase = TURN_PHASE;
+
+    // 记录初始状态
+    initialHeading = std::atan2(params.initialVelocity.east, params.initialVelocity.north);
+    initialAltitude = params.initialPosition.altitude;
+    initialSpeed = std::sqrt(
+        params.initialVelocity.north * params.initialVelocity.north +
+        params.initialVelocity.east * params.initialVelocity.east
+    );
+
+    // 计算转弯速率（弧度/秒）
+    turnRate = params.maxTurnRate * Constants::DEG_TO_RAD;
+
+    // 计算各阶段持续时间
+    turnDuration = M_PI / turnRate;  // 180度转弯时间
+    descentDuration = (initialAltitude - params.targetAltitude) / params.descentRate;  // 下降时间
+    levelDuration = params.duration - turnDuration - descentDuration;  // 改平时间
+
+    // 确保改平时间不为负
+    if (levelDuration < 0) {
+        levelDuration = 0;
+    }
+
+    descentRate = params.descentRate;
+    targetAltitude = params.targetAltitude;
+}
+
+void ImmelmanEscape::update(double currentTime, double dt,
+                            GeoPosition& position,
+                            Velocity3& velocity,
+                            AttitudeAngles& attitude) {
+    if (!isActive(currentTime)) return;
+
+    this->currentTime = currentTime;
+    double maneuverTime = currentTime - params.startTime;
+
+    if (maneuverTime < turnDuration) {
+        // TURN_PHASE: 掉转机头180度
+        currentPhase = TURN_PHASE;
+        currentGForce = 2.0;  // 转弯时略大于1G
+
+        double turnProgress = maneuverTime / turnDuration;
+        double currentHeading = initialHeading + M_PI * turnProgress * params.turnDirection;
+
+        // 记录转弯结束位置
+        turnEndLat = position.latitude;
+        turnEndLon = position.longitude;
+        turnEndAlt = position.altitude;
+
+        // 更新速度和姿态
+        velocity.north = initialSpeed * std::cos(currentHeading);
+        velocity.east = initialSpeed * std::sin(currentHeading);
+        velocity.up = 0.0;
+
+        // 对航向角进行归一化
+        attitude.yaw = currentHeading;
+        while (attitude.yaw > M_PI) attitude.yaw -= 2.0 * M_PI;
+        while (attitude.yaw < -M_PI) attitude.yaw += 2.0 * M_PI;
+        attitude.pitch = 0.0;
+        attitude.roll = 30.0 * Constants::DEG_TO_RAD * params.turnDirection;  // 转弯坡度
+
+        // 位置沿直线更新
+        updatePositionFromVelocity(dt, position, velocity);
+
+    } else if (maneuverTime < turnDuration + descentDuration) {
+        // DESCENT_PHASE: 下降至目标高度
+        currentPhase = DESCENT_PHASE;
+        currentGForce = 1.0;  // 下降时1G
+
+        double descentTime = maneuverTime - turnDuration;
+        double currentAlt = turnEndAlt - descentRate * descentTime;
+
+        // 确保不低于目标高度
+        if (currentAlt < targetAltitude) {
+            currentAlt = targetAltitude;
+        }
+
+        // 航向保持转弯后的方向
+        double currentHeading = initialHeading + M_PI * params.turnDirection;
+
+        velocity.north = initialSpeed * std::cos(currentHeading);
+        velocity.east = initialSpeed * std::sin(currentHeading);
+        velocity.up = -descentRate;
+
+        // 对航向角进行归一化
+        attitude.yaw = currentHeading;
+        while (attitude.yaw > M_PI) attitude.yaw -= 2.0 * M_PI;
+        while (attitude.yaw < -M_PI) attitude.yaw += 2.0 * M_PI;
+        attitude.pitch = -15.0 * Constants::DEG_TO_RAD;  // 俯冲角
+        attitude.roll = 0.0;
+
+        position.altitude = currentAlt;
+        updatePositionFromVelocity(dt, position, velocity);
+
+    } else {
+        // LEVEL_PHASE: 改平保持高度
+        currentPhase = LEVEL_PHASE;
+        currentGForce = 1.0;
+
+        double currentHeading = initialHeading + M_PI * params.turnDirection;
+
+        velocity.north = initialSpeed * std::cos(currentHeading);
+        velocity.east = initialSpeed * std::sin(currentHeading);
+        velocity.up = 0.0;
+
+        // 对航向角进行归一化
+        attitude.yaw = currentHeading;
+        while (attitude.yaw > M_PI) attitude.yaw -= 2.0 * M_PI;
+        while (attitude.yaw < -M_PI) attitude.yaw += 2.0 * M_PI;
+        attitude.pitch = 0.0;
+        attitude.roll = 0.0;
+
+        updatePositionFromVelocity(dt, position, velocity);
+    }
+}
+
+void ImmelmanEscape::reset() {
+    currentTime = 0.0;
+    currentGForce = 1.0;
+    currentPhase = TURN_PHASE;
+}
+
+// ============================================================================
+// LPattern L型机动模型实现
+// ============================================================================
+// L型机动：直飞 → 90度转弯 → 直飞
+void LPattern::initialize(const Parameters& params) {
+    this->params = params;
+    currentTime = 0.0;
+    currentGForce = 1.0;
+    currentPhase = LEG1_STRAIGHT;
+
+    // 记录初始状态
+    initialHeading = std::atan2(params.initialVelocity.east, params.initialVelocity.north);
+    initialSpeed = std::sqrt(
+        params.initialVelocity.north * params.initialVelocity.north +
+        params.initialVelocity.east * params.initialVelocity.east
+    );
+
+    leg1Distance = params.leg1Distance;
+    turnAngle = params.turnAngle * Constants::DEG_TO_RAD;
+
+    // 计算转弯半径
+    turnRadius = calculateTurnRadius(initialSpeed, params.targetGForce);
+    turnRate = calculateTurnRate(initialSpeed, params.targetGForce);
+
+    // 计算各阶段持续时间
+    leg1Duration = leg1Distance / initialSpeed;
+    turnDuration = turnAngle / turnRate;
+    leg2Duration = params.duration - leg1Duration - turnDuration;
+
+    // 初始化转弯结束位置
+    turnEndLat = params.initialPosition.latitude;
+    turnEndLon = params.initialPosition.longitude;
+    turnEndAlt = params.initialPosition.altitude;
+}
+
+void LPattern::update(double currentTime, double dt,
+                      GeoPosition& position,
+                      Velocity3& velocity,
+                      AttitudeAngles& attitude) {
+    if (!isActive(currentTime)) return;
+
+    this->currentTime = currentTime;
+    double maneuverTime = currentTime - params.startTime;
+    double progress = maneuverTime / params.duration;
+
+    // 计算当前过载
+    double targetG = 1.0;
+    if (maneuverTime >= leg1Duration && maneuverTime < leg1Duration + turnDuration) {
+        targetG = params.targetGForce;
+    }
+    applyGForceConstraint(targetG);
+    currentGForce = targetG;
+
+    if (maneuverTime < leg1Duration) {
+        // LEG1_STRAIGHT: 第一段直飞
+        currentPhase = LEG1_STRAIGHT;
+
+        velocity.north = initialSpeed * std::cos(initialHeading);
+        velocity.east = initialSpeed * std::sin(initialHeading);
+        velocity.up = 0.0;
+
+        attitude.yaw = initialHeading;
+        attitude.pitch = 0.0;
+        attitude.roll = 0.0;
+
+        updatePositionFromVelocity(dt, position, velocity);
+
+        // 记录第一段结束位置
+        if (maneuverTime + dt >= leg1Duration) {
+            turnEndLat = position.latitude;
+            turnEndLon = position.longitude;
+            turnEndAlt = position.altitude;
+        }
+
+    } else if (maneuverTime < leg1Duration + turnDuration) {
+        // TURN_PHASE: 转弯
+        currentPhase = TURN_PHASE;
+
+        double turnTime = maneuverTime - leg1Duration;
+        double angleTurned = turnRate * turnTime * params.turnDirection;
+        double currentHeading = initialHeading + angleTurned;
+
+        velocity.north = initialSpeed * std::cos(currentHeading);
+        velocity.east = initialSpeed * std::sin(currentHeading);
+        velocity.up = 0.0;
+
+        // 对航向角进行归一化
+        attitude.yaw = currentHeading;
+        while (attitude.yaw > M_PI) attitude.yaw -= 2.0 * M_PI;
+        while (attitude.yaw < -M_PI) attitude.yaw += 2.0 * M_PI;
+        attitude.pitch = 0.0;
+        attitude.roll = std::atan(initialSpeed * initialSpeed / (Constants::G * turnRadius)) * params.turnDirection;
+
+        updatePositionFromVelocity(dt, position, velocity);
+
+        // 记录转弯结束位置
+        if (maneuverTime + dt >= leg1Duration + turnDuration) {
+            turnEndLat = position.latitude;
+            turnEndLon = position.longitude;
+            turnEndAlt = position.altitude;
+        }
+
+    } else {
+        // LEG2_STRAIGHT: 第二段直飞
+        currentPhase = LEG2_STRAIGHT;
+
+        double finalHeading = initialHeading + turnAngle * params.turnDirection;
+
+        velocity.north = initialSpeed * std::cos(finalHeading);
+        velocity.east = initialSpeed * std::sin(finalHeading);
+        velocity.up = 0.0;
+
+        // 对航向角进行归一化
+        attitude.yaw = finalHeading;
+        while (attitude.yaw > M_PI) attitude.yaw -= 2.0 * M_PI;
+        while (attitude.yaw < -M_PI) attitude.yaw += 2.0 * M_PI;
+        attitude.pitch = 0.0;
+        attitude.roll = 0.0;
+
+        updatePositionFromVelocity(dt, position, velocity);
+    }
+}
+
+void LPattern::reset() {
+    currentTime = 0.0;
+    currentGForce = 1.0;
+    currentPhase = LEG1_STRAIGHT;
+}
+
+// ============================================================================
+// SPattern S型机动模型实现
+// ============================================================================
+// S型机动：两次反向转弯形成S形航线
+void SPattern::initialize(const Parameters& params) {
+    this->params = params;
+    currentTime = 0.0;
+    currentGForce = 1.0;
+    currentPhase = FIRST_TURN;
+    currentTurn = 0;
+
+    // 记录初始状态
+    initialHeading = std::atan2(params.initialVelocity.east, params.initialVelocity.north);
+    initialSpeed = std::sqrt(
+        params.initialVelocity.north * params.initialVelocity.north +
+        params.initialVelocity.east * params.initialVelocity.east
+    );
+
+    // 计算转弯半径
+    turnRadius = params.sTurnRadius;
+    turnRate = calculateTurnRate(initialSpeed, params.targetGForce);
+
+    // 计算一次转弯的持续时间（90度）
+    turnDuration = (M_PI / 2.0) / turnRate;
+
+    // 计算第一个转弯的圆心
+    double angle1 = initialHeading + (params.turnDirection > 0 ? M_PI/2 : -M_PI/2);
+    turn1CenterNorth = params.initialPosition.latitude +
+        turnRadius * std::cos(angle1) / Constants::EARTH_RADIUS * Constants::RAD_TO_DEG;
+    turn1CenterEast = params.initialPosition.longitude +
+        turnRadius * std::sin(angle1) / (Constants::EARTH_RADIUS *
+        std::cos(params.initialPosition.latitude * Constants::DEG_TO_RAD)) * Constants::RAD_TO_DEG;
+
+    // 初始化第一个转弯结束位置
+    turn1EndLat = params.initialPosition.latitude;
+    turn1EndLon = params.initialPosition.longitude;
+    turn1EndAlt = params.initialPosition.altitude;
+}
+
+void SPattern::update(double currentTime, double dt,
+                      GeoPosition& position,
+                      Velocity3& velocity,
+                      AttitudeAngles& attitude) {
+    if (!isActive(currentTime)) return;
+
+    this->currentTime = currentTime;
+    double maneuverTime = currentTime - params.startTime;
+    double progress = maneuverTime / params.duration;
+
+    // 计算当前过载
+    double targetG = params.targetGForce;
+    applyGForceConstraint(targetG);
+    currentGForce = targetG;
+
+    double currentHeading;
+
+    if (maneuverTime < turnDuration) {
+        // FIRST_TURN: 第一次转弯（90度）
+        currentPhase = FIRST_TURN;
+        currentTurn = 1;
+
+        double turnProgress = maneuverTime / turnDuration;
+        double angleTurned = (M_PI / 2.0) * turnProgress * params.turnDirection;
+        currentHeading = initialHeading + angleTurned;
+
+        velocity.north = initialSpeed * std::cos(currentHeading);
+        velocity.east = initialSpeed * std::sin(currentHeading);
+        velocity.up = 0.0;
+
+        // 对航向角进行归一化
+        attitude.yaw = currentHeading;
+        while (attitude.yaw > M_PI) attitude.yaw -= 2.0 * M_PI;
+        while (attitude.yaw < -M_PI) attitude.yaw += 2.0 * M_PI;
+        attitude.pitch = 0.0;
+        attitude.roll = std::atan(initialSpeed * initialSpeed / (Constants::G * turnRadius)) * params.turnDirection;
+
+        updatePositionFromVelocity(dt, position, velocity);
+
+        // 记录第一个转弯结束位置
+        if (maneuverTime + dt >= turnDuration) {
+            turn1EndLat = position.latitude;
+            turn1EndLon = position.longitude;
+            turn1EndAlt = position.altitude;
+
+            // 计算第二个转弯的圆心（在第一个转弯结束点的相反方向）
+            double headingAfterTurn1 = initialHeading + (M_PI / 2.0) * params.turnDirection;
+            double angle2 = headingAfterTurn1 + (params.turnDirection > 0 ? -M_PI/2 : M_PI/2);
+            turn2CenterNorth = turn1EndLat +
+                turnRadius * std::cos(angle2) / Constants::EARTH_RADIUS * Constants::RAD_TO_DEG;
+            turn2CenterEast = turn1EndLon +
+                turnRadius * std::sin(angle2) / (Constants::EARTH_RADIUS *
+                std::cos(turn1EndLat * Constants::DEG_TO_RAD)) * Constants::RAD_TO_DEG;
+        }
+
+    } else if (maneuverTime < 2.0 * turnDuration) {
+        // SECOND_TURN: 第二次转弯（反向90度）
+        currentPhase = SECOND_TURN;
+        currentTurn = 2;
+
+        double turn2Time = maneuverTime - turnDuration;
+        double headingAfterTurn1 = initialHeading + (M_PI / 2.0) * params.turnDirection;
+        double angleTurned = (M_PI / 2.0) * (turn2Time / turnDuration) * (-params.turnDirection);
+        currentHeading = headingAfterTurn1 + angleTurned;
+
+        velocity.north = initialSpeed * std::cos(currentHeading);
+        velocity.east = initialSpeed * std::sin(currentHeading);
+        velocity.up = 0.0;
+
+        // 对航向角进行归一化
+        attitude.yaw = currentHeading;
+        while (attitude.yaw > M_PI) attitude.yaw -= 2.0 * M_PI;
+        while (attitude.yaw < -M_PI) attitude.yaw += 2.0 * M_PI;
+        attitude.pitch = 0.0;
+        attitude.roll = -std::atan(initialSpeed * initialSpeed / (Constants::G * turnRadius)) * params.turnDirection;
+
+        updatePositionFromVelocity(dt, position, velocity);
+
+    } else {
+        // 完成S形后继续直飞
+        double finalHeading = initialHeading;  // 两次反向90度转弯后回到原航向
+
+        velocity.north = initialSpeed * std::cos(finalHeading);
+        velocity.east = initialSpeed * std::sin(finalHeading);
+        velocity.up = 0.0;
+
+        // 对航向角进行归一化
+        attitude.yaw = finalHeading;
+        while (attitude.yaw > M_PI) attitude.yaw -= 2.0 * M_PI;
+        while (attitude.yaw < -M_PI) attitude.yaw += 2.0 * M_PI;
+        attitude.pitch = 0.0;
+        attitude.roll = 0.0;
+
+        updatePositionFromVelocity(dt, position, velocity);
+    }
+}
+
+void SPattern::reset() {
+    currentTime = 0.0;
+    currentGForce = 1.0;
+    currentPhase = FIRST_TURN;
+    currentTurn = 0;
+}
+
+// ============================================================================
 // Factory 工厂类实现
 // ============================================================================
 std::shared_ptr<Model> Factory::create(Type type) {
@@ -698,6 +1482,18 @@ std::shared_ptr<Model> Factory::create(Type type) {
             return std::make_shared<Roll>();
         case Type::SPLIT_S:
             return std::make_shared<SplitS>();
+        case Type::CONSTANT_TURN:
+            return std::make_shared<ConstantTurn>();
+        case Type::RACETRACK_PATTERN:
+            return std::make_shared<RacetrackPattern>();
+        case Type::EIGHT_PATTERN:
+            return std::make_shared<EightPattern>();
+        case Type::IMMELMAN_ESCAPE:
+            return std::make_shared<ImmelmanEscape>();
+        case Type::L_PATTERN:
+            return std::make_shared<LPattern>();
+        case Type::S_PATTERN:
+            return std::make_shared<SPattern>();
         default:
             throw std::invalid_argument("Unknown maneuver type");
     }

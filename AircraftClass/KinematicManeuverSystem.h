@@ -82,7 +82,15 @@ enum class Type {
     LEVEL_TURN,    // 水平转弯
     LOOP,          // 筋斗
     ROLL,          // 横滚
-    SPLIT_S        // 半滚倒转
+    SPLIT_S,       // 半滚倒转
+
+    // 新增类型
+    CONSTANT_TURN,       // 定速定高盘旋
+    RACETRACK_PATTERN,   // 跑道型盘旋
+    EIGHT_PATTERN,       // 8字型盘旋
+    IMMELMAN_ESCAPE,     // 置尾降高逃逸
+    L_PATTERN,           // L型机动
+    S_PATTERN            // S型机动
 };
 
 // ============================================================================
@@ -102,6 +110,32 @@ struct Parameters {
     // 初始状态
     GeoPosition initialPosition;
     Velocity3 initialVelocity;
+
+    // ========== 新增参数 ==========
+    // 多圈/重复机动
+    int numCircles = 1;              // 圈数（用于定速定高盘旋）
+    int numLaps = 1;                 // 跑道圈数
+
+    // 跑道型盘旋
+    double straightLength = 5000.0;  // 直道段长度（米）
+    double turnRadius = 1000.0;      // 转弯半径（米）
+
+    // 8字型盘旋
+    double patternWidth = 2000.0;    // 8字宽度（米）
+    double patternHeight = 1000.0;   // 8字高度（米）
+
+    // 置尾降高逃逸
+    double targetAltitude = 5000.0;  // 目标高度（米）
+    double descentRate = 50.0;       // 下降速率（米/秒）
+    double maxTurnRate = 10.0;       // 最大转弯速率（度/秒）
+
+    // L型机动
+    double leg1Distance = 5000.0;    // 第一段距离（米）
+    double turnAngle = 90.0;         // 转弯角度（度）
+
+    // S型机动
+    double sTurnRadius = 1000.0;     // S型转弯半径（米）
+    int numTurns = 2;                // S型转弯次数（2次形成完整S）
 
     // 获取默认参数
     static Parameters getDefault(Type type);
@@ -259,6 +293,190 @@ private:
     Quaternion currentQuaternion;   // 当前姿态四元数
     Quaternion rollEndQuaternion;   // 滚转结束时的姿态四元数（倒飞，半筋斗起点）
     Quaternion halfLoopEndQuaternion; // 半筋斗结束时的姿态四元数（正飞，航向反转）
+};
+
+// ============================================================================
+// 定速定高盘旋模型
+// ============================================================================
+class ConstantTurn : public Model {
+public:
+    void initialize(const Parameters& params) override;
+    void update(double currentTime, double dt,
+               GeoPosition& position,
+               Velocity3& velocity,
+               AttitudeAngles& attitude) override;
+    void reset() override;
+    std::string getName() const override { return "Constant Turn"; }
+
+private:
+    double turnRadius = 0.0;
+    double turnRate = 0.0;
+    double initialHeading = 0.0;
+    double turnCenterNorth = 0.0;
+    double turnCenterEast = 0.0;
+};
+
+// ============================================================================
+// 跑道型盘旋模型
+// ============================================================================
+class RacetrackPattern : public Model {
+public:
+    void initialize(const Parameters& params) override;
+    void update(double currentTime, double dt,
+               GeoPosition& position,
+               Velocity3& velocity,
+               AttitudeAngles& attitude) override;
+    void reset() override;
+    std::string getName() const override { return "Racetrack Pattern"; }
+
+private:
+    enum Phase { LEG1_STRAIGHT, LEG2_TURN, LEG3_STRAIGHT, LEG4_TURN };
+    Phase currentPhase = LEG1_STRAIGHT;
+
+    double straightLength = 0.0;
+    double turnRadius = 0.0;
+    double turnRate = 0.0;
+    double initialHeading = 0.0;
+    double initialSpeed = 0.0;
+
+    // 阶段时间
+    double t1 = 0.0, t2 = 0.0, t3 = 0.0, t4 = 0.0;
+
+    // 转弯圆心
+    double turn1CenterNorth = 0.0, turn1CenterEast = 0.0;
+    double turn2CenterNorth = 0.0, turn2CenterEast = 0.0;
+
+    // 各阶段起点位置
+    double leg1EndLat = 0.0, leg1EndLon = 0.0, leg1EndAlt = 0.0;
+    double leg2EndLat = 0.0, leg2EndLon = 0.0, leg2EndAlt = 0.0;
+    double leg3EndLat = 0.0, leg3EndLon = 0.0, leg3EndAlt = 0.0;
+
+    int currentLap = 0;
+};
+
+// ============================================================================
+// 8字型盘旋模型
+// ============================================================================
+class EightPattern : public Model {
+public:
+    void initialize(const Parameters& params) override;
+    void update(double currentTime, double dt,
+               GeoPosition& position,
+               Velocity3& velocity,
+               AttitudeAngles& attitude) override;
+    void reset() override;
+    std::string getName() const override { return "Eight Pattern"; }
+
+private:
+    enum Phase { FIRST_CIRCLE, SECOND_CIRCLE };
+    Phase currentPhase = FIRST_CIRCLE;
+
+    double turnRadius = 0.0;
+    double turnRate = 0.0;
+    double initialHeading = 0.0;
+    double initialSpeed = 0.0;
+
+    // 两个圆的圆心
+    double circle1CenterNorth = 0.0, circle1CenterEast = 0.0;
+    double circle2CenterNorth = 0.0, circle2CenterEast = 0.0;
+
+    double circleDuration = 0.0;  // 一个圆的持续时间
+};
+
+// ============================================================================
+// 置尾降高逃逸模型
+// ============================================================================
+class ImmelmanEscape : public Model {
+public:
+    void initialize(const Parameters& params) override;
+    void update(double currentTime, double dt,
+               GeoPosition& position,
+               Velocity3& velocity,
+               AttitudeAngles& attitude) override;
+    void reset() override;
+    std::string getName() const override { return "Immelman Escape"; }
+
+private:
+    enum Phase { TURN_PHASE, DESCENT_PHASE, LEVEL_PHASE };
+    Phase currentPhase = TURN_PHASE;
+
+    double turnRate = 0.0;           // 弧度/秒
+    double descentRate = 0.0;        // 米/秒
+    double targetAltitude = 0.0;
+
+    double turnDuration = 0.0;
+    double descentDuration = 0.0;
+    double levelDuration = 0.0;
+
+    double initialHeading = 0.0;
+    double initialAltitude = 0.0;
+    double initialSpeed = 0.0;
+
+    double turnEndLat = 0.0, turnEndLon = 0.0, turnEndAlt = 0.0;
+};
+
+// ============================================================================
+// L型机动模型
+// ============================================================================
+class LPattern : public Model {
+public:
+    void initialize(const Parameters& params) override;
+    void update(double currentTime, double dt,
+               GeoPosition& position,
+               Velocity3& velocity,
+               AttitudeAngles& attitude) override;
+    void reset() override;
+    std::string getName() const override { return "L Pattern"; }
+
+private:
+    enum Phase { LEG1_STRAIGHT, TURN_PHASE, LEG2_STRAIGHT };
+    Phase currentPhase = LEG1_STRAIGHT;
+
+    double leg1Distance = 0.0;
+    double turnAngle = 0.0;
+    double turnRadius = 0.0;
+    double turnRate = 0.0;
+    double initialSpeed = 0.0;
+
+    double leg1Duration = 0.0;
+    double turnDuration = 0.0;
+    double leg2Duration = 0.0;
+
+    double initialHeading = 0.0;
+    double turnEndLat = 0.0, turnEndLon = 0.0, turnEndAlt = 0.0;
+};
+
+// ============================================================================
+// S型机动模型
+// ============================================================================
+class SPattern : public Model {
+public:
+    void initialize(const Parameters& params) override;
+    void update(double currentTime, double dt,
+               GeoPosition& position,
+               Velocity3& velocity,
+               AttitudeAngles& attitude) override;
+    void reset() override;
+    std::string getName() const override { return "S Pattern"; }
+
+private:
+    enum Phase { FIRST_TURN, SECOND_TURN };
+    Phase currentPhase = FIRST_TURN;
+
+    double turnRadius = 0.0;
+    double turnRate = 0.0;
+    double initialHeading = 0.0;
+    double initialSpeed = 0.0;
+
+    double turnDuration = 0.0;
+    int currentTurn = 0;  // 当前执行到第几个转弯
+
+    // 第一个转弯的圆心
+    double turn1CenterNorth = 0.0, turn1CenterEast = 0.0;
+    // 第二个转弯的圆心
+    double turn2CenterNorth = 0.0, turn2CenterEast = 0.0;
+
+    double turn1EndLat = 0.0, turn1EndLon = 0.0, turn1EndAlt = 0.0;
 };
 
 // ============================================================================

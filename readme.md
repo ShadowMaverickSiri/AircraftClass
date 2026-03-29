@@ -8,7 +8,9 @@ AircraftClass 是一个用 C++ 实现的飞行器机动运动学仿真系统，�
 
 ### 1. 机动模型 (KinematicManeuverSystem)
 
-实现了四种经典战斗机机动：
+实现了十种经典战斗机机动：
+
+#### 基础机动
 
 | 机动类型 | 英文名称 | 说明 |
 |---------|---------|------|
@@ -16,6 +18,17 @@ AircraftClass 是一个用 C++ 实现的飞行器机动运动学仿真系统，�
 | 筋斗 | Loop | 垂直平面内的完整圆周运动 |
 | 横滚 | Roll | 绕纵轴的滚转机动 |
 | 半滚倒转 | Split-S | 先滚转180°倒飞，再完成半筋斗向下 |
+
+#### 高级机动
+
+| 机动类型 | 英文名称 | 说明 | 复杂度 |
+|---------|---------|------|--------|
+| 定速定高盘旋 | Constant Turn | 水平圆周运动，可指定圈数 | 低 |
+| 跑道型盘旋 | Racetrack Pattern | 矩形跑道路径（直道段+弯道段） | 中 |
+| 8字型盘旋 | Eight Pattern | 两个相切圆形成的8字形 | 中 |
+| 置尾降高逃逸 | Immelman Escape | 最大速率掉转机头+下降至指定高度+改平 | 中 |
+| L型机动 | L Pattern | 直飞→90度转→直飞 | 低 |
+| S型机动 | S Pattern | 两次反向转弯形成S形航线 | 低 |
 
 ### 2. 四元数姿态解算 (Quaternion Attitude Solver)
 
@@ -100,6 +113,113 @@ T = 2πR / v = 2πv / (g × (n - 1))
 - 滚转角从180°平滑过渡到0°
 - 俯仰角自然变化（底部最大）
 - 偏航角从初始航向过渡到反向航向
+
+### 新增机动类型说明 (v3.0.0)
+
+#### 定速定高盘旋 (Constant Turn)
+
+水平圆周运动，支持指定完成圈数。
+
+**参数配置：**
+```cpp
+params.targetGForce = 3.0;           // 转弯过载
+params.turnDirection = -1.0;          // 转弯方向 (1.0=右转, -1.0=左转)
+params.numCircles = 2;                // 完成圈数
+params.autoCalculateDuration = true;  // 自动计算持续时间
+```
+
+**计算公式：**
+```
+转弯半径: R = v² / (g × (n - 1))
+转弯速率: ω = g × (n - 1) / v
+一圈时间: T = 2π / ω
+总时间: T_total = T × numCircles
+```
+
+#### 跑道型盘旋 (Racetrack Pattern)
+
+矩形跑道路径，由两段直道和两个180°转弯组成。
+
+**参数配置：**
+```cpp
+params.straightLength = 8000.0;  // 直道段长度（米）
+params.turnRadius = 1500.0;      // 转弯半径（米）
+params.numLaps = 1;              // 圈数
+params.autoCalculateDuration = true;
+```
+
+**阶段划分：**
+1. LEG1_STRAIGHT - 第一段直道
+2. LEG2_TURN - 第一个180°转弯
+3. LEG3_STRAIGHT - 第二段直道（反向）
+4. LEG4_TURN - 第二个180°转弯
+
+#### 8字型盘旋 (Eight Pattern)
+
+两个相切圆形成的8字形轨迹。
+
+**参数配置：**
+```cpp
+params.targetGForce = 4.0;          // 转弯过载
+params.turnDirection = -1.0;         // 转弯方向
+params.autoCalculateDuration = true;
+```
+
+**几何原理：**
+- 第一个圆：从切点开始，完成360°圆周运动
+- 第二个圆：从第一个圆结束点开始，完成相反方向的360°圆周运动
+- 两个圆圆心位于起始点两侧，距离为2×转弯半径
+
+#### 置尾降高逃逸 (Immelman Escape)
+
+战术机动：快速掉转机头并下降至安全高度。
+
+**参数配置：**
+```cpp
+params.targetAltitude = 8000.0;   // 目标高度（米）
+params.descentRate = 80.0;        // 下降速率（米/秒）
+params.maxTurnRate = 15.0;        // 最大转弯速率（度/秒）
+params.duration = 40.0;           // 总持续时间
+```
+
+**阶段划分：**
+1. TURN_PHASE - 以最大速率掉转机头180°
+2. DESCENT_PHASE - 以指定速率下降至目标高度
+3. LEVEL_PHASE - 改平保持高度飞行
+
+#### L型机动 (L Pattern)
+
+直飞→90°转弯→直飞，常用于航线转换。
+
+**参数配置：**
+```cpp
+params.leg1Distance = 8000.0;  // 第一段距离（米）
+params.turnAngle = 90.0;       // 转弯角度（度）
+params.targetGForce = 3.0;     // 转弯过载
+```
+
+#### S型机动 (S Pattern)
+
+两次反向转弯形成S形航线，常用于规避机动。
+
+**参数配置：**
+```cpp
+params.sTurnRadius = 1500.0;  // 转弯半径（米）
+params.numTurns = 2;          // 转弯次数
+params.targetGForce = 4.0;    // 转弯过载
+```
+
+### 航向角归一化
+
+所有新增机动类型都实现了航向角归一化，确保角度值始终保持在 `[-π, π]` 范围内：
+
+```cpp
+attitude.yaw = currentHeading;
+while (attitude.yaw > M_PI) attitude.yaw -= 2.0 * M_PI;
+while (attitude.yaw < -M_PI) attitude.yaw += 2.0 * M_PI;
+```
+
+这对于多圈机动和持续转弯尤为重要，可防止角度累积导致的 Tacview 显示异常。
 
 ## 四元数工具类
 
@@ -241,6 +361,19 @@ MIT License
 liusi
 
 ## 更新日志
+
+### v3.0.0 (2026-03-29)
+- 新增6种高级机动类型：
+  - 定速定高盘旋 (Constant Turn) - 支持指定圈数的水平圆周运动
+  - 跑道型盘旋 (Racetrack Pattern) - 矩形跑道路径
+  - 8字型盘旋 (Eight Pattern) - 两个相切圆形成的8字形
+  - 置尾降高逃逸 (Immelman Escape) - 战术逃逸机动
+  - L型机动 (L Pattern) - 航线转换机动
+  - S型机动 (S Pattern) - 规避机动
+- 实现航向角归一化，修复 Tacview 多圈机动显示异常问题
+- 扩展 Parameters 结构体，新增多种机动专用参数
+- 更新示例程序，新增6个示例函数和菜单选项
+- 生成轨迹文件输出 (.dat 和 .csv 格式)
 
 ### v2.0.0 (2025-03-06)
 - 重构 Split-S 机动模型，使用四元数 SLERP 插值

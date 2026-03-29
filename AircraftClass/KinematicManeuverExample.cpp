@@ -157,6 +157,122 @@ struct SimulationRecord {
 };
 
 // ============================================================================
+// 文件导出辅助类
+// ============================================================================
+
+// .dat格式文件导出器 - 空格分隔的轨迹数据
+class DatFileExporter {
+public:
+    DatFileExporter() : fileOpened(false) {}
+
+    bool open(const std::string& filename) {
+        file.open(filename);
+        if (file.is_open()) {
+            fileOpened = true;
+            // 写入表头
+            file << "# Time Latitude Longitude Altitude Vn Vu Ve Roll Pitch Yaw\n";
+            file << "# [s]   [deg]      [deg]       [m]     [m/s][m/s][m/s][deg] [deg] [deg]\n";
+            return true;
+        }
+        return false;
+    }
+
+    void writeRecord(double time, const GeoPosition& pos, const Velocity3& vel,
+                     const AttitudeAngles& att, double gForce) {
+        if (!fileOpened) return;
+
+        double rollDeg = att.roll * 180.0 / M_PI;
+        double pitchDeg = att.pitch * 180.0 / M_PI;
+        double yawDeg = att.yaw * 180.0 / M_PI;
+
+        file << std::fixed << std::setprecision(4)
+             << time << " "
+             << pos.latitude << " "
+             << pos.longitude << " "
+             << pos.altitude << " "
+             << vel.north << " "
+             << vel.up << " "
+             << vel.east << " "
+             << rollDeg << " "
+             << pitchDeg << " "
+             << yawDeg << "\n";
+    }
+
+    void close() {
+        if (file.is_open()) {
+            file.close();
+        }
+        fileOpened = false;
+    }
+
+    ~DatFileExporter() {
+        close();
+    }
+
+private:
+    std::ofstream file;
+    bool fileOpened;
+};
+
+// .csv格式文件导出器 - Tacview支持的CSV格式
+class CsvFileExporter {
+public:
+    CsvFileExporter() : fileOpened(false) {}
+
+    bool open(const std::string& filename) {
+        file.open(filename);
+        if (file.is_open()) {
+            fileOpened = true;
+            // 写入Tacview CSV格式的表头
+            file << "Time,Longitude,Latitude,Altitude,Roll (deg),Pitch (deg),Yaw (deg)\n";
+            return true;
+        }
+        return false;
+    }
+
+    void writeRecord(double time, const GeoPosition& pos, const Velocity3& vel,
+                     const AttitudeAngles& att) {
+        if (!fileOpened) return;
+
+        double rollDeg = att.roll * 180.0 / M_PI;
+        double pitchDeg = att.pitch * 180.0 / M_PI;
+        double yawDeg = att.yaw * 180.0 / M_PI;
+
+        // 检查数值有效性
+        if (!std::isfinite(rollDeg)) rollDeg = 0.0;
+        if (!std::isfinite(pitchDeg)) pitchDeg = 0.0;
+        if (!std::isfinite(yawDeg)) yawDeg = 0.0;
+        if (!std::isfinite(pos.longitude)) return;
+        if (!std::isfinite(pos.latitude)) return;
+        if (!std::isfinite(pos.altitude)) return;
+
+        file << std::fixed << std::setprecision(4)
+             << time << ","
+             << pos.longitude << ","
+             << pos.latitude << ","
+             << pos.altitude << ","
+             << rollDeg << ","
+             << pitchDeg << ","
+             << yawDeg << "\n";
+    }
+
+    void close() {
+        if (file.is_open()) {
+            file.close();
+        }
+        fileOpened = false;
+    }
+
+    ~CsvFileExporter() {
+        close();
+    }
+
+private:
+    std::ofstream file;
+    bool fileOpened;
+};
+
+// ============================================================================
 // 示例1：水平转弯（带 Tacview 输出）
 // ============================================================================
 void exampleLevelTurn() {
@@ -180,7 +296,7 @@ void exampleLevelTurn() {
     params.initialVelocity = fighter.velocity;
     params.targetGForce = 3.0;     // 3G 转弯
     params.duration = 20.0;        // 20秒
-    params.turnDirection = 1.0;    // 右转
+    params.turnDirection = -1.0;    // 右转
 
     // 创建机动模型
     auto maneuver = Factory::create(Type::LEVEL_TURN);
@@ -191,7 +307,16 @@ void exampleLevelTurn() {
     exporter.setObjectID(0x3E9);
 
     // 启用日志记录以便调试
-    telemetry.enableLogging("E:\\MyCode\\AircraftClass-main\\x64\\Debug\\telemetry_log.acmi");
+    telemetry.enableLogging("telemetry_log.acmi");
+
+    // 创建文件导出器
+    DatFileExporter datExporter;
+    CsvFileExporter csvExporter;
+    std::string datFilename = "level_turn_trajectory.dat";
+    std::string csvFilename = "level_turn_trajectory.csv";
+    datExporter.open(datFilename);
+    csvExporter.open(csvFilename);
+    std::cout << "[文件导出] 已创建: " << datFilename << " 和 " << csvFilename << "\n";
 
     std::cout << "\n[Tacview] 请按以下步骤连接 Tacview:\n";
     std::cout << "  1. 打开 Tacview 软件\n";
@@ -246,6 +371,10 @@ void exampleLevelTurn() {
         maneuver->update(t, dt, fighter.position, fighter.velocity, fighter.attitude);
         printState(t, fighter.position, fighter.velocity, fighter.attitude, maneuver->getCurrentGForce());
 
+        // 导出轨迹数据到文件
+        datExporter.writeRecord(t, fighter.position, fighter.velocity, fighter.attitude, maneuver->getCurrentGForce());
+        csvExporter.writeRecord(t, fighter.position, fighter.velocity, fighter.attitude);
+
         // 发送 Tacview 遥测数据：先发送时间帧，再发送对象更新
         std::string timeFrame = exporter.createTimeFrame(t);
         std::string objUpdate = exporter.createObjectUpdate(fighter.position, fighter.velocity, fighter.attitude);
@@ -266,6 +395,12 @@ void exampleLevelTurn() {
     std::cout << "\n机动完成! 您可以在 Tacview 中回放查看轨迹。\n";
     std::cout << "按 Enter 键返回主菜单...\n";
     std::cin.get();
+
+    // 关闭文件导出器
+    datExporter.close();
+    csvExporter.close();
+    std::cout << "[文件导出] 轨迹文件已保存。\n";
+
     telemetry.stop();
 }
 
@@ -291,6 +426,7 @@ void exampleLoop() {
     params.initialPosition = fighter.position;
     params.initialVelocity = fighter.velocity;
     params.targetGForce = 8.0;
+	
 
     // 根据速度和过载计算理论完成时间和筋斗半径
     double theoreticalDuration = Loop::calculateTheoreticalDuration(V0, params.targetGForce);
@@ -303,7 +439,16 @@ void exampleLoop() {
     TacviewExporter exporter;
     exporter.setObjectID(0x3EA);
 
-    telemetry.enableLogging("E:\\MyCode\\AircraftClass-main\\x64\\Debug\\telemetry_log.acmi");
+    telemetry.enableLogging("telemetry_log.acmi");
+
+    // 创建文件导出器
+    DatFileExporter datExporter;
+    CsvFileExporter csvExporter;
+    std::string datFilename = "loop_trajectory.dat";
+    std::string csvFilename = "loop_trajectory.csv";
+    datExporter.open(datFilename);
+    csvExporter.open(csvFilename);
+    std::cout << "[文件导出] 已创建: " << datFilename << " 和 " << csvFilename << "\n";
 
     std::cout << "\n[Tacview] 请按以下步骤连接 Tacview:\n";
     std::cout << "  1. 打开 Tacview 软件\n";
@@ -354,6 +499,10 @@ void exampleLoop() {
                                maneuver->getCurrentGForce(), 300.0);
         }
 
+        // 导出轨迹数据到文件
+        datExporter.writeRecord(t, fighter.position, fighter.velocity, fighter.attitude, maneuver->getCurrentGForce());
+        csvExporter.writeRecord(t, fighter.position, fighter.velocity, fighter.attitude);
+
         std::string timeFrame = exporter.createTimeFrame(t);
         std::string objUpdate = exporter.createObjectUpdate(fighter.position, fighter.velocity, fighter.attitude);
         telemetry.broadcastLine(timeFrame);
@@ -365,6 +514,12 @@ void exampleLoop() {
     std::cout << "\n机动完成! 您可以在 Tacview 中回放查看轨迹。\n";
     std::cout << "按 Enter 键返回主菜单...\n";
     std::cin.get();
+
+    // 关闭文件导出器
+    datExporter.close();
+    csvExporter.close();
+    std::cout << "[文件导出] 轨迹文件已保存。\n";
+
     telemetry.stop();
 }
 
@@ -394,7 +549,16 @@ void exampleSplitS() {
     exporter.setObjectID(0x3EB);
 
     // 启用日志记录
-    telemetry.enableLogging("E:\\MyCode\\AircraftClass-main\\x64\\Debug\\telemetry_log.acmi");
+    telemetry.enableLogging("telemetry_log.acmi");
+
+    // 创建文件导出器
+    DatFileExporter datExporter;
+    CsvFileExporter csvExporter;
+    std::string datFilename = "splits_trajectory.dat";
+    std::string csvFilename = "splits_trajectory.csv";
+    datExporter.open(datFilename);
+    csvExporter.open(csvFilename);
+    std::cout << "[文件导出] 已创建: " << datFilename << " 和 " << csvFilename << "\n";
 
     std::cout << "\n[Tacview] 请按以下步骤连接 Tacview:\n";
     std::cout << "  1. 打开 Tacview 软件\n";
@@ -462,6 +626,10 @@ void exampleSplitS() {
             maneuver->getCurrentGForce()
         });
 
+        // 导出轨迹数据到文件
+        datExporter.writeRecord(t, fighter.position, fighter.velocity, fighter.attitude, maneuver->getCurrentGForce());
+        csvExporter.writeRecord(t, fighter.position, fighter.velocity, fighter.attitude);
+
         // 发送 Tacview 数据：先发送时间帧，再发送对象更新
         std::string timeFrame = exporter.createTimeFrame(t);
         std::string objUpdate = exporter.createObjectUpdate(fighter.position, fighter.velocity, fighter.attitude);
@@ -513,6 +681,11 @@ void exampleSplitS() {
     std::cout << "按 Enter 键返回主菜单...\n";
     std::cin.get();
 
+    // 关闭文件导出器
+    datExporter.close();
+    csvExporter.close();
+    std::cout << "[文件导出] 轨迹文件已保存。\n";
+
     telemetry.stop();
 }
 
@@ -542,7 +715,16 @@ void exampleRoll() {
     exporter.setObjectID(0x3EC);
 
     // 启用日志记录
-    telemetry.enableLogging("E:\\MyCode\\AircraftClass-main\\x64\\Debug\\telemetry_log.acmi");
+    telemetry.enableLogging("telemetry_log.acmi");
+
+    // 创建文件导出器
+    DatFileExporter datExporter;
+    CsvFileExporter csvExporter;
+    std::string datFilename = "roll_trajectory.dat";
+    std::string csvFilename = "roll_trajectory.csv";
+    datExporter.open(datFilename);
+    csvExporter.open(csvFilename);
+    std::cout << "[文件导出] 已创建: " << datFilename << " 和 " << csvFilename << "\n";
 
     std::cout << "\n[Tacview] 请按以下步骤连接 Tacview:\n";
     std::cout << "  1. 打开 Tacview 软件\n";
@@ -594,6 +776,10 @@ void exampleRoll() {
         maneuver->update(t, dt, fighter.position, fighter.velocity, fighter.attitude);
         printState(t, fighter.position, fighter.velocity, fighter.attitude, maneuver->getCurrentGForce());
 
+        // 导出轨迹数据到文件
+        datExporter.writeRecord(t, fighter.position, fighter.velocity, fighter.attitude, maneuver->getCurrentGForce());
+        csvExporter.writeRecord(t, fighter.position, fighter.velocity, fighter.attitude);
+
         // 发送时间帧和对象更新
         std::string timeFrame = exporter.createTimeFrame(t);
         std::string objUpdate = exporter.createObjectUpdate(fighter.position, fighter.velocity, fighter.attitude);
@@ -613,6 +799,624 @@ void exampleRoll() {
     std::cout << "\n机动完成! 您可以在 Tacview 中回放查看轨迹。\n";
     std::cout << "按 Enter 键返回主菜单...\n";
     std::cin.get();
+
+    // 关闭文件导出器
+    datExporter.close();
+    csvExporter.close();
+    std::cout << "[文件导出] 轨迹文件已保存。\n";
+
+    telemetry.stop();
+}
+
+// ============================================================================
+// 示例5：定速定高盘旋（带 Tacview 输出）
+// ============================================================================
+void exampleConstantTurn() {
+    printHeader("示例5：定速定高盘旋 (Constant Turn) + Tacview遥测");
+
+    TacviewTelemetry telemetry;
+    telemetry.start(42674);
+
+    FighterJet fighter(FighterType::F16_FALCON,
+                      {116.0, 39.0, 10000},
+                      {250, 0, 0});
+
+    auto params = Factory::getDefaultParams(Type::CONSTANT_TURN);
+    params.initialPosition = fighter.position;
+    params.initialVelocity = fighter.velocity;
+    params.targetGForce = 3.0;
+    params.turnDirection = -1.0;
+    params.numCircles = 2;
+    params.autoCalculateDuration = true;
+
+    auto maneuver = Factory::create(Type::CONSTANT_TURN);
+    maneuver->initialize(params);
+
+    TacviewExporter exporter;
+    exporter.setObjectID(0x3ED);
+
+    telemetry.enableLogging("telemetry_log.acmi");
+
+    DatFileExporter datExporter;
+    CsvFileExporter csvExporter;
+    std::string datFilename = "constant_turn_trajectory.dat";
+    std::string csvFilename = "constant_turn_trajectory.csv";
+    datExporter.open(datFilename);
+    csvExporter.open(csvFilename);
+    std::cout << "[文件导出] 已创建: " << datFilename << " 和 " << csvFilename << "\n";
+
+    std::cout << "\n[Tacview] 请按以下步骤连接 Tacview:\n";
+    std::cout << "  1. 打开 Tacview 软件\n";
+    std::cout << "  2. 选择: 文件 -> 连接到实时遥测源...\n";
+    std::cout << "  3. 选择 127.0.0.1:42674\n";
+    std::cout << "\n等待 Tacview 连接...\n";
+
+    while (!telemetry.hasClients()) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    }
+    std::cout << "[Tacview] 已连接! 发送初始化数据...\n\n";
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+
+    telemetry.broadcastLine(exporter.initializeHeader());
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+
+    std::string timeFrame0 = exporter.createTimeFrame(0.0);
+    telemetry.broadcastLine(timeFrame0);
+
+    std::ostringstream initLine;
+    initLine << exporter.createAircraftObject("F-16", "Red")
+             << ",T=" << std::fixed << std::setprecision(6)
+             << fighter.position.longitude << "|"
+             << fighter.position.latitude << "|"
+             << std::fixed << std::setprecision(1)
+             << fighter.position.altitude;
+    telemetry.broadcastLine(initLine.str());
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+
+    std::cout << "\n机型: F-16 Fighting Falcon\n";
+    std::cout << "圈数: " << params.numCircles << "\n";
+    std::cout << "机动参数: " << params.targetGForce << "G\n\n";
+
+    std::cout << "时间 | 经度 | 纬度 | 高度 | 过载 | 俯仰 | 滚转 | 偏航\n";
+    std::cout << "-----------------------------------------------------------\n";
+
+    const double dt = 0.1;
+
+    for (double t = dt; t <= params.duration + 2.0; t += dt) {
+        maneuver->update(t, dt, fighter.position, fighter.velocity, fighter.attitude);
+        printState(t, fighter.position, fighter.velocity, fighter.attitude, maneuver->getCurrentGForce());
+
+        datExporter.writeRecord(t, fighter.position, fighter.velocity, fighter.attitude, maneuver->getCurrentGForce());
+        csvExporter.writeRecord(t, fighter.position, fighter.velocity, fighter.attitude);
+
+        std::string timeFrame = exporter.createTimeFrame(t);
+        std::string objUpdate = exporter.createObjectUpdate(fighter.position, fighter.velocity, fighter.attitude);
+        telemetry.broadcastLine(timeFrame);
+        telemetry.broadcastLine(objUpdate);
+
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    }
+
+    std::cout << "\n机动完成! 您可以在 Tacview 中回放查看轨迹。\n";
+    std::cout << "按 Enter 键返回主菜单...\n";
+    std::cin.get();
+
+    datExporter.close();
+    csvExporter.close();
+    std::cout << "[文件导出] 轨迹文件已保存。\n";
+
+    telemetry.stop();
+}
+
+// ============================================================================
+// 示例6：跑道型盘旋（带 Tacview 输出）
+// ============================================================================
+void exampleRacetrackPattern() {
+    printHeader("示例6：跑道型盘旋 (Racetrack Pattern) + Tacview遥测");
+
+    TacviewTelemetry telemetry;
+    telemetry.start(42674);
+
+    FighterJet fighter(FighterType::SU27_FLANKER,
+                      {116.0, 39.0, 10000},
+                      {280, 0, 0});
+
+    auto params = Factory::getDefaultParams(Type::RACETRACK_PATTERN);
+    params.initialPosition = fighter.position;
+    params.initialVelocity = fighter.velocity;
+    params.targetGForce = 3.0;
+    params.turnDirection = -1.0;
+    params.straightLength = 8000.0;
+    params.turnRadius = 1500.0;
+    params.numLaps = 1;
+    params.autoCalculateDuration = true;
+
+    auto maneuver = Factory::create(Type::RACETRACK_PATTERN);
+    maneuver->initialize(params);
+
+    TacviewExporter exporter;
+    exporter.setObjectID(0x3EE);
+
+    telemetry.enableLogging("telemetry_log.acmi");
+
+    DatFileExporter datExporter;
+    CsvFileExporter csvExporter;
+    std::string datFilename = "racetrack_trajectory.dat";
+    std::string csvFilename = "racetrack_trajectory.csv";
+    datExporter.open(datFilename);
+    csvExporter.open(csvFilename);
+    std::cout << "[文件导出] 已创建: " << datFilename << " 和 " << csvFilename << "\n";
+
+    std::cout << "\n[Tacview] 请按以下步骤连接 Tacview:\n";
+    std::cout << "  1. 打开 Tacview 软件\n";
+    std::cout << "  2. 选择: 文件 -> 连接到实时遥测源...\n";
+    std::cout << "  3. 选择 127.0.0.1:42674\n";
+    std::cout << "\n等待 Tacview 连接...\n";
+
+    while (!telemetry.hasClients()) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    }
+    std::cout << "[Tacview] 已连接! 发送初始化数据...\n\n";
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+
+    telemetry.broadcastLine(exporter.initializeHeader());
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+
+    std::string timeFrame0 = exporter.createTimeFrame(0.0);
+    telemetry.broadcastLine(timeFrame0);
+
+    std::ostringstream initLine;
+    initLine << exporter.createAircraftObject("Su-27", "Blue")
+             << ",T=" << std::fixed << std::setprecision(6)
+             << fighter.position.longitude << "|"
+             << fighter.position.latitude << "|"
+             << std::fixed << std::setprecision(1)
+             << fighter.position.altitude;
+    telemetry.broadcastLine(initLine.str());
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+
+    std::cout << "\n机型: Su-27 Flanker\n";
+    std::cout << "圈数: " << params.numLaps << "\n";
+    std::cout << "直道长度: " << params.straightLength << " m\n";
+    std::cout << "转弯半径: " << params.turnRadius << " m\n\n";
+
+    std::cout << "时间 | 经度 | 纬度 | 高度 | 过载 | 俯仰 | 滚转 | 偏航\n";
+    std::cout << "-----------------------------------------------------------\n";
+
+    const double dt = 0.1;
+
+    for (double t = dt; t <= params.duration + 2.0; t += dt) {
+        maneuver->update(t, dt, fighter.position, fighter.velocity, fighter.attitude);
+        printState(t, fighter.position, fighter.velocity, fighter.attitude, maneuver->getCurrentGForce());
+
+        datExporter.writeRecord(t, fighter.position, fighter.velocity, fighter.attitude, maneuver->getCurrentGForce());
+        csvExporter.writeRecord(t, fighter.position, fighter.velocity, fighter.attitude);
+
+        std::string timeFrame = exporter.createTimeFrame(t);
+        std::string objUpdate = exporter.createObjectUpdate(fighter.position, fighter.velocity, fighter.attitude);
+        telemetry.broadcastLine(timeFrame);
+        telemetry.broadcastLine(objUpdate);
+
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    }
+
+    std::cout << "\n机动完成! 您可以在 Tacview 中回放查看轨迹。\n";
+    std::cout << "按 Enter 键返回主菜单...\n";
+    std::cin.get();
+
+    datExporter.close();
+    csvExporter.close();
+    std::cout << "[文件导出] 轨迹文件已保存。\n";
+
+    telemetry.stop();
+}
+
+// ============================================================================
+// 示例7：8字型盘旋（带 Tacview 输出）
+// ============================================================================
+void exampleEightPattern() {
+    printHeader("示例7：8字型盘旋 (Eight Pattern) + Tacview遥测");
+
+    TacviewTelemetry telemetry;
+    telemetry.start(42674);
+
+    FighterJet fighter(FighterType::MIG29_FULCRUM,
+                      {116.0, 39.0, 10000},
+                      {300, 0, 0});
+
+    auto params = Factory::getDefaultParams(Type::EIGHT_PATTERN);
+    params.initialPosition = fighter.position;
+    params.initialVelocity = fighter.velocity;
+    params.targetGForce = 4.0;
+    params.turnDirection = -1.0;
+    params.autoCalculateDuration = true;
+
+    auto maneuver = Factory::create(Type::EIGHT_PATTERN);
+    maneuver->initialize(params);
+
+    TacviewExporter exporter;
+    exporter.setObjectID(0x3EF);
+
+    telemetry.enableLogging("telemetry_log.acmi");
+
+    DatFileExporter datExporter;
+    CsvFileExporter csvExporter;
+    std::string datFilename = "eight_pattern_trajectory.dat";
+    std::string csvFilename = "eight_pattern_trajectory.csv";
+    datExporter.open(datFilename);
+    csvExporter.open(csvFilename);
+    std::cout << "[文件导出] 已创建: " << datFilename << " 和 " << csvFilename << "\n";
+
+    std::cout << "\n[Tacview] 请按以下步骤连接 Tacview:\n";
+    std::cout << "  1. 打开 Tacview 软件\n";
+    std::cout << "  2. 选择: 文件 -> 连接到实时遥测源...\n";
+    std::cout << "  3. 选择 127.0.0.1:42674\n";
+    std::cout << "\n等待 Tacview 连接...\n";
+
+    while (!telemetry.hasClients()) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    }
+    std::cout << "[Tacview] 已连接! 发送初始化数据...\n\n";
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+
+    telemetry.broadcastLine(exporter.initializeHeader());
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+
+    std::string timeFrame0 = exporter.createTimeFrame(0.0);
+    telemetry.broadcastLine(timeFrame0);
+
+    std::ostringstream initLine;
+    initLine << exporter.createAircraftObject("MiG-29", "Red")
+             << ",T=" << std::fixed << std::setprecision(6)
+             << fighter.position.longitude << "|"
+             << fighter.position.latitude << "|"
+             << std::fixed << std::setprecision(1)
+             << fighter.position.altitude;
+    telemetry.broadcastLine(initLine.str());
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+
+    std::cout << "\n机型: MiG-29 Fulcrum\n";
+    std::cout << "机动参数: " << params.targetGForce << "G\n\n";
+
+    std::cout << "时间 | 经度 | 纬度 | 高度 | 过载 | 俯仰 | 滚转 | 偏航\n";
+    std::cout << "-----------------------------------------------------------\n";
+
+    const double dt = 0.1;
+
+    for (double t = dt; t <= params.duration + 2.0; t += dt) {
+        maneuver->update(t, dt, fighter.position, fighter.velocity, fighter.attitude);
+        printState(t, fighter.position, fighter.velocity, fighter.attitude, maneuver->getCurrentGForce());
+
+        datExporter.writeRecord(t, fighter.position, fighter.velocity, fighter.attitude, maneuver->getCurrentGForce());
+        csvExporter.writeRecord(t, fighter.position, fighter.velocity, fighter.attitude);
+
+        std::string timeFrame = exporter.createTimeFrame(t);
+        std::string objUpdate = exporter.createObjectUpdate(fighter.position, fighter.velocity, fighter.attitude);
+        telemetry.broadcastLine(timeFrame);
+        telemetry.broadcastLine(objUpdate);
+
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    }
+
+    std::cout << "\n机动完成! 您可以在 Tacview 中回放查看轨迹。\n";
+    std::cout << "按 Enter 键返回主菜单...\n";
+    std::cin.get();
+
+    datExporter.close();
+    csvExporter.close();
+    std::cout << "[文件导出] 轨迹文件已保存。\n";
+
+    telemetry.stop();
+}
+
+// ============================================================================
+// 示例8：置尾降高逃逸（带 Tacview 输出）
+// ============================================================================
+void exampleImmelmanEscape() {
+    printHeader("示例8：置尾降高逃逸 (Immelman Escape) + Tacview遥测");
+
+    TacviewTelemetry telemetry;
+    telemetry.start(42674);
+
+    FighterJet fighter(FighterType::F22_RAPTOR,
+                      {116.0, 39.0, 12000},
+                      {300, 0, 0});
+
+    auto params = Factory::getDefaultParams(Type::IMMELMAN_ESCAPE);
+    params.initialPosition = fighter.position;
+    params.initialVelocity = fighter.velocity;
+    params.turnDirection = -1.0;
+    params.targetAltitude = 8000.0;
+    params.descentRate = 80.0;
+    params.maxTurnRate = 15.0;
+    params.duration = 40.0;
+
+    auto maneuver = Factory::create(Type::IMMELMAN_ESCAPE);
+    maneuver->initialize(params);
+
+    TacviewExporter exporter;
+    exporter.setObjectID(0x3F0);
+
+    telemetry.enableLogging("telemetry_log.acmi");
+
+    DatFileExporter datExporter;
+    CsvFileExporter csvExporter;
+    std::string datFilename = "immelmann_escape_trajectory.dat";
+    std::string csvFilename = "immelmann_escape_trajectory.csv";
+    datExporter.open(datFilename);
+    csvExporter.open(csvFilename);
+    std::cout << "[文件导出] 已创建: " << datFilename << " 和 " << csvFilename << "\n";
+
+    std::cout << "\n[Tacview] 请按以下步骤连接 Tacview:\n";
+    std::cout << "  1. 打开 Tacview 软件\n";
+    std::cout << "  2. 选择: 文件 -> 连接到实时遥测源...\n";
+    std::cout << "  3. 选择 127.0.0.1:42674\n";
+    std::cout << "\n等待 Tacview 连接...\n";
+
+    while (!telemetry.hasClients()) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    }
+    std::cout << "[Tacview] 已连接! 发送初始化数据...\n\n";
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+
+    telemetry.broadcastLine(exporter.initializeHeader());
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+
+    std::string timeFrame0 = exporter.createTimeFrame(0.0);
+    telemetry.broadcastLine(timeFrame0);
+
+    std::ostringstream initLine;
+    initLine << exporter.createAircraftObject("F-22", "Red")
+             << ",T=" << std::fixed << std::setprecision(6)
+             << fighter.position.longitude << "|"
+             << fighter.position.latitude << "|"
+             << std::fixed << std::setprecision(1)
+             << fighter.position.altitude;
+    telemetry.broadcastLine(initLine.str());
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+
+    std::cout << "\n机型: F-22 Raptor\n";
+    std::cout << "初始高度: " << fighter.position.altitude << " m\n";
+    std::cout << "目标高度: " << params.targetAltitude << " m\n";
+    std::cout << "下降速率: " << params.descentRate << " m/s\n";
+    std::cout << "最大转弯速率: " << params.maxTurnRate << " deg/s\n\n";
+
+    std::cout << "时间 | 经度 | 纬度 | 高度 | 过载 | 俯仰 | 滚转 | 偏航\n";
+    std::cout << "-----------------------------------------------------------\n";
+
+    const double dt = 0.1;
+
+    for (double t = dt; t <= params.duration + 2.0; t += dt) {
+        maneuver->update(t, dt, fighter.position, fighter.velocity, fighter.attitude);
+        printState(t, fighter.position, fighter.velocity, fighter.attitude, maneuver->getCurrentGForce());
+
+        datExporter.writeRecord(t, fighter.position, fighter.velocity, fighter.attitude, maneuver->getCurrentGForce());
+        csvExporter.writeRecord(t, fighter.position, fighter.velocity, fighter.attitude);
+
+        std::string timeFrame = exporter.createTimeFrame(t);
+        std::string objUpdate = exporter.createObjectUpdate(fighter.position, fighter.velocity, fighter.attitude);
+        telemetry.broadcastLine(timeFrame);
+        telemetry.broadcastLine(objUpdate);
+
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    }
+
+    std::cout << "\n机动完成! 您可以在 Tacview 中回放查看轨迹。\n";
+    std::cout << "按 Enter 键返回主菜单...\n";
+    std::cin.get();
+
+    datExporter.close();
+    csvExporter.close();
+    std::cout << "[文件导出] 轨迹文件已保存。\n";
+
+    telemetry.stop();
+}
+
+// ============================================================================
+// 示例9：L型机动（带 Tacview 输出）
+// ============================================================================
+void exampleLPattern() {
+    printHeader("示例9：L型机动 (L Pattern) + Tacview遥测");
+
+    TacviewTelemetry telemetry;
+    telemetry.start(42674);
+
+    FighterJet fighter(FighterType::F35_LIGHTNING,
+                      {116.0, 39.0, 10000},
+                      {280, 0, 0});
+
+    auto params = Factory::getDefaultParams(Type::L_PATTERN);
+    params.initialPosition = fighter.position;
+    params.initialVelocity = fighter.velocity;
+    params.targetGForce = 3.0;
+    params.turnDirection = -1.0;
+    params.leg1Distance = 8000.0;
+    params.turnAngle = 90.0;
+    params.duration = 40.0;
+
+    auto maneuver = Factory::create(Type::L_PATTERN);
+    maneuver->initialize(params);
+
+    TacviewExporter exporter;
+    exporter.setObjectID(0x3F1);
+
+    telemetry.enableLogging("telemetry_log.acmi");
+
+    DatFileExporter datExporter;
+    CsvFileExporter csvExporter;
+    std::string datFilename = "l_pattern_trajectory.dat";
+    std::string csvFilename = "l_pattern_trajectory.csv";
+    datExporter.open(datFilename);
+    csvExporter.open(csvFilename);
+    std::cout << "[文件导出] 已创建: " << datFilename << " 和 " << csvFilename << "\n";
+
+    std::cout << "\n[Tacview] 请按以下步骤连接 Tacview:\n";
+    std::cout << "  1. 打开 Tacview 软件\n";
+    std::cout << "  2. 选择: 文件 -> 连接到实时遥测源...\n";
+    std::cout << "  3. 选择 127.0.0.1:42674\n";
+    std::cout << "\n等待 Tacview 连接...\n";
+
+    while (!telemetry.hasClients()) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    }
+    std::cout << "[Tacview] 已连接! 发送初始化数据...\n\n";
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+
+    telemetry.broadcastLine(exporter.initializeHeader());
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+
+    std::string timeFrame0 = exporter.createTimeFrame(0.0);
+    telemetry.broadcastLine(timeFrame0);
+
+    std::ostringstream initLine;
+    initLine << exporter.createAircraftObject("F-35", "Green")
+             << ",T=" << std::fixed << std::setprecision(6)
+             << fighter.position.longitude << "|"
+             << fighter.position.latitude << "|"
+             << std::fixed << std::setprecision(1)
+             << fighter.position.altitude;
+    telemetry.broadcastLine(initLine.str());
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+
+    std::cout << "\n机型: F-35 Lightning II\n";
+    std::cout << "第一段距离: " << params.leg1Distance << " m\n";
+    std::cout << "转弯角度: " << params.turnAngle << " deg\n\n";
+
+    std::cout << "时间 | 经度 | 纬度 | 高度 | 过载 | 俯仰 | 滚转 | 偏航\n";
+    std::cout << "-----------------------------------------------------------\n";
+
+    const double dt = 0.1;
+
+    for (double t = dt; t <= params.duration + 2.0; t += dt) {
+        maneuver->update(t, dt, fighter.position, fighter.velocity, fighter.attitude);
+        printState(t, fighter.position, fighter.velocity, fighter.attitude, maneuver->getCurrentGForce());
+
+        datExporter.writeRecord(t, fighter.position, fighter.velocity, fighter.attitude, maneuver->getCurrentGForce());
+        csvExporter.writeRecord(t, fighter.position, fighter.velocity, fighter.attitude);
+
+        std::string timeFrame = exporter.createTimeFrame(t);
+        std::string objUpdate = exporter.createObjectUpdate(fighter.position, fighter.velocity, fighter.attitude);
+        telemetry.broadcastLine(timeFrame);
+        telemetry.broadcastLine(objUpdate);
+
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    }
+
+    std::cout << "\n机动完成! 您可以在 Tacview 中回放查看轨迹。\n";
+    std::cout << "按 Enter 键返回主菜单...\n";
+    std::cin.get();
+
+    datExporter.close();
+    csvExporter.close();
+    std::cout << "[文件导出] 轨迹文件已保存。\n";
+
+    telemetry.stop();
+}
+
+// ============================================================================
+// 示例10：S型机动（带 Tacview 输出）
+// ============================================================================
+void exampleSPattern() {
+    printHeader("示例10：S型机动 (S Pattern) + Tacview遥测");
+
+    TacviewTelemetry telemetry;
+    telemetry.start(42674);
+
+    FighterJet fighter(FighterType::MIG29_FULCRUM,
+                      {116.0, 39.0, 10000},
+                      {300, 0, 0});
+
+    auto params = Factory::getDefaultParams(Type::S_PATTERN);
+    params.initialPosition = fighter.position;
+    params.initialVelocity = fighter.velocity;
+    params.targetGForce = 4.0;
+    params.turnDirection = -1.0;
+    params.sTurnRadius = 1500.0;
+    params.numTurns = 2;
+    params.duration = 30.0;
+
+    auto maneuver = Factory::create(Type::S_PATTERN);
+    maneuver->initialize(params);
+
+    TacviewExporter exporter;
+    exporter.setObjectID(0x3F2);
+
+    telemetry.enableLogging("telemetry_log.acmi");
+
+    DatFileExporter datExporter;
+    CsvFileExporter csvExporter;
+    std::string datFilename = "s_pattern_trajectory.dat";
+    std::string csvFilename = "s_pattern_trajectory.csv";
+    datExporter.open(datFilename);
+    csvExporter.open(csvFilename);
+    std::cout << "[文件导出] 已创建: " << datFilename << " 和 " << csvFilename << "\n";
+
+    std::cout << "\n[Tacview] 请按以下步骤连接 Tacview:\n";
+    std::cout << "  1. 打开 Tacview 软件\n";
+    std::cout << "  2. 选择: 文件 -> 连接到实时遥测源...\n";
+    std::cout << "  3. 选择 127.0.0.1:42674\n";
+    std::cout << "\n等待 Tacview 连接...\n";
+
+    while (!telemetry.hasClients()) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    }
+    std::cout << "[Tacview] 已连接! 发送初始化数据...\n\n";
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+
+    telemetry.broadcastLine(exporter.initializeHeader());
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+
+    std::string timeFrame0 = exporter.createTimeFrame(0.0);
+    telemetry.broadcastLine(timeFrame0);
+
+    std::ostringstream initLine;
+    initLine << exporter.createAircraftObject("MiG-29", "Orange")
+             << ",T=" << std::fixed << std::setprecision(6)
+             << fighter.position.longitude << "|"
+             << fighter.position.latitude << "|"
+             << std::fixed << std::setprecision(1)
+             << fighter.position.altitude;
+    telemetry.broadcastLine(initLine.str());
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+
+    std::cout << "\n机型: MiG-29 Fulcrum\n";
+    std::cout << "转弯半径: " << params.sTurnRadius << " m\n";
+    std::cout << "转弯次数: " << params.numTurns << "\n\n";
+
+    std::cout << "时间 | 经度 | 纬度 | 高度 | 过载 | 俯仰 | 滚转 | 偏航\n";
+    std::cout << "-----------------------------------------------------------\n";
+
+    const double dt = 0.1;
+
+    for (double t = dt; t <= params.duration + 2.0; t += dt) {
+        maneuver->update(t, dt, fighter.position, fighter.velocity, fighter.attitude);
+        printState(t, fighter.position, fighter.velocity, fighter.attitude, maneuver->getCurrentGForce());
+
+        datExporter.writeRecord(t, fighter.position, fighter.velocity, fighter.attitude, maneuver->getCurrentGForce());
+        csvExporter.writeRecord(t, fighter.position, fighter.velocity, fighter.attitude);
+
+        std::string timeFrame = exporter.createTimeFrame(t);
+        std::string objUpdate = exporter.createObjectUpdate(fighter.position, fighter.velocity, fighter.attitude);
+        telemetry.broadcastLine(timeFrame);
+        telemetry.broadcastLine(objUpdate);
+
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    }
+
+    std::cout << "\n机动完成! 您可以在 Tacview 中回放查看轨迹。\n";
+    std::cout << "按 Enter 键返回主菜单...\n";
+    std::cin.get();
+
+    datExporter.close();
+    csvExporter.close();
+    std::cout << "[文件导出] 轨迹文件已保存。\n";
+
     telemetry.stop();
 }
 
@@ -637,13 +1441,19 @@ int main() {
     std::cout << "5. 连接成功后即可实时查看飞行轨迹\n\n";
 
     int choice = 0;
-    while (choice != 5) {
+    while (choice != 11) {
         std::cout << "\n请选择示例:\n";
         std::cout << "  1. 水平转弯 (Level Turn)\n";
         std::cout << "  2. 筋斗机动 (Loop)\n";
         std::cout << "  3. 半滚倒转 (Split-S) - 输出 CSV\n";
         std::cout << "  4. 横滚机动 (Roll)\n";
-        std::cout << "  5. 退出\n";
+        std::cout << "  5. 定速定高盘旋 (Constant Turn)\n";
+        std::cout << "  6. 跑道型盘旋 (Racetrack Pattern)\n";
+        std::cout << "  7. 8字型盘旋 (Eight Pattern)\n";
+        std::cout << "  8. 置尾降高逃逸 (Immelman Escape)\n";
+        std::cout << "  9. L型机动 (L Pattern)\n";
+        std::cout << " 10. S型机动 (S Pattern)\n";
+        std::cout << " 11. 退出\n";
         std::cout << "选择: ";
         std::cin >> choice;
 
@@ -652,7 +1462,13 @@ int main() {
             case 2: exampleLoop(); break;
             case 3: exampleSplitS(); break;
             case 4: exampleRoll(); break;
-            case 5: std::cout << "退出程序。\n"; break;
+            case 5: exampleConstantTurn(); break;
+            case 6: exampleRacetrackPattern(); break;
+            case 7: exampleEightPattern(); break;
+            case 8: exampleImmelmanEscape(); break;
+            case 9: exampleLPattern(); break;
+            case 10: exampleSPattern(); break;
+            case 11: std::cout << "退出程序。\n"; break;
             default: std::cout << "无效选择，请重试。\n";
         }
     }
