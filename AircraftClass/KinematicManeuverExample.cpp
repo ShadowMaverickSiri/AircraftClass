@@ -824,7 +824,7 @@ void exampleConstantTurn() {
     auto params = Factory::getDefaultParams(Type::CONSTANT_TURN);
     params.initialPosition = fighter.position;
     params.initialVelocity = fighter.velocity;
-    params.targetGForce = 3.0;
+    params.targetGForce = 5.0;
     params.turnDirection = -1.0;
     params.numCircles = 2;
     params.autoCalculateDuration = true;
@@ -877,6 +877,7 @@ void exampleConstantTurn() {
     std::cout << "\n机型: F-16 Fighting Falcon\n";
     std::cout << "圈数: " << params.numCircles << "\n";
     std::cout << "机动参数: " << params.targetGForce << "G\n\n";
+	std::cout << "机动时间: " << params.duration << "s\n\n";
 
     std::cout << "时间 | 经度 | 纬度 | 高度 | 过载 | 俯仰 | 滚转 | 偏航\n";
     std::cout << "-----------------------------------------------------------\n";

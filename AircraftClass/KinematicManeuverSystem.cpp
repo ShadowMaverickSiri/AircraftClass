@@ -5,227 +5,10 @@
 
 using namespace KinematicManeuver;
 
-// ============================================================================
-// Quaternion 四元数类实现
-// ============================================================================
-
-// 从欧拉角构造四元数 (ZYX顺序: yaw->pitch->roll)
-Quaternion Quaternion::fromEuler(double roll, double pitch, double yaw) {
-    double cy = std::cos(yaw * 0.5);
-    double sy = std::sin(yaw * 0.5);
-    double cp = std::cos(pitch * 0.5);
-    double sp = std::sin(pitch * 0.5);
-    double cr = std::cos(roll * 0.5);
-    double sr = std::sin(roll * 0.5);
-
-    Quaternion q;
-    q.w = cr * cp * cy + sr * sp * sy;
-    q.x = sr * cp * cy - cr * sp * sy;
-    q.y = cr * sp * cy + sr * cp * sy;
-    q.z = cr * cp * sy - sr * sp * cy;
-    return q;
-}
-
-Quaternion Quaternion::fromEuler(const AttitudeAngles& attitude) {
-    return fromEuler(attitude.roll, attitude.pitch, attitude.yaw);
-}
-
-// 从旋转轴和角度构造四元数
-Quaternion Quaternion::fromAxisAngle(double axisX, double axisY, double axisZ, double angle) {
-    double halfAngle = angle * 0.5;
-    double sinHalf = std::sin(halfAngle);
-    double cosHalf = std::cos(halfAngle);
-
-    // 归一化轴向量
-    double len = std::sqrt(axisX * axisX + axisY * axisY + axisZ * axisZ);
-    if (len < 1e-10) {
-        return Quaternion();  // 返回单位四元数
-    }
-
-    Quaternion q;
-    q.w = cosHalf;
-    q.x = (axisX / len) * sinHalf;
-    q.y = (axisY / len) * sinHalf;
-    q.z = (axisZ / len) * sinHalf;
-    return q;
-}
-
-Quaternion Quaternion::fromAxisAngle(const double axis[3], double angle) {
-    return fromAxisAngle(axis[0], axis[1], axis[2], angle);
-}
-
-// 转换为欧拉角
-void Quaternion::toEuler(double& roll, double& pitch, double& yaw) const {
-    // roll (x-axis rotation)
-    double sinr_cosp = 2 * (w * x + y * z);
-    double cosr_cosp = 1 - 2 * (x * x + y * y);
-    roll = std::atan2(sinr_cosp, cosr_cosp);
-
-    // pitch (y-axis rotation)
-    double sinp = 2 * (w * y - z * x);
-    if (std::abs(sinp) >= 1) {
-        pitch = std::copysign(Constants::PI / 2, sinp);  // 使用90度如果超出范围
-    } else {
-        pitch = std::asin(sinp);
-    }
-
-    // yaw (z-axis rotation)
-    double siny_cosp = 2 * (w * z + x * y);
-    double cosy_cosp = 1 - 2 * (y * y + z * z);
-    yaw = std::atan2(siny_cosp, cosy_cosp);
-}
-
-AttitudeAngles Quaternion::toEuler() const {
-    AttitudeAngles attitude;
-    toEuler(attitude.roll, attitude.pitch, attitude.yaw);
-    return attitude;
-}
-
-// 四元数归一化
-Quaternion Quaternion::normalized() const {
-    double n = norm();
-    if (n < 1e-10) {
-        return Quaternion();  // 返回单位四元数
-    }
-    return Quaternion(w / n, x / n, y / n, z / n);
-}
-
-// 四元数共轭
-Quaternion Quaternion::conjugate() const {
-    return Quaternion(w, -x, -y, -z);
-}
-
-// 四元数求逆
-Quaternion Quaternion::inverse() const {
-    double n2 = normSquared();
-    if (n2 < 1e-10) {
-        return Quaternion();  // 返回单位四元数
-    }
-    Quaternion conj = conjugate();
-    return Quaternion(conj.w / n2, conj.x / n2, conj.y / n2, conj.z / n2);
-}
-
-// 四元数乘法
-Quaternion Quaternion::operator*(const Quaternion& q) const {
-    return Quaternion(
-        w * q.w - x * q.x - y * q.y - z * q.z,
-        w * q.x + x * q.w + y * q.z - z * q.y,
-        w * q.y - x * q.z + y * q.w + z * q.x,
-        w * q.z + x * q.y - y * q.x + z * q.w
-    );
-}
-
-// 四元数与标量乘法
-Quaternion Quaternion::operator*(double scalar) const {
-    return Quaternion(w * scalar, x * scalar, y * scalar, z * scalar);
-}
-
-// 四元数加法
-Quaternion Quaternion::operator+(const Quaternion& q) const {
-    return Quaternion(w + q.w, x + q.x, y + q.y, z + q.z);
-}
-
-// 计算四元数的模
-double Quaternion::norm() const {
-    return std::sqrt(w * w + x * x + y * y + z * z);
-}
-
-// 计算四元数的模的平方
-double Quaternion::normSquared() const {
-    return w * w + x * x + y * y + z * z;
-}
-
-// 点积
-double Quaternion::dot(const Quaternion& q) const {
-    return w * q.w + x * q.x + y * q.y + z * q.z;
-}
-
-// 球面线性插值 (SLERP)
-Quaternion Quaternion::slerp(const Quaternion& q0, const Quaternion& q1, double t) {
-    // 计算两个四元数之间的夹角余弦值
-    double cosOmega = q0.dot(q1);
-
-    // 如果夹角余弦为负，取反一个四元数以选择最短路径
-    Quaternion q1Temp = q1;
-    if (cosOmega < 0.0) {
-        q1Temp = Quaternion(-q1.w, -q1.x, -q1.y, -q1.z);
-        cosOmega = -cosOmega;
-    }
-
-    // 如果四元数非常接近，使用线性插值
-    if (cosOmega > 0.9999) {
-        return Quaternion(
-            q0.w + t * (q1Temp.w - q0.w),
-            q0.x + t * (q1Temp.x - q0.x),
-            q0.y + t * (q1Temp.y - q0.y),
-            q0.z + t * (q1Temp.z - q0.z)
-        ).normalized();
-    }
-
-    // 计算夹角
-    double omega = std::acos(cosOmega);
-    double sinOmega = std::sin(omega);
-
-    // SLERP公式
-    double scale0 = std::sin((1.0 - t) * omega) / sinOmega;
-    double scale1 = std::sin(t * omega) / sinOmega;
-
-    return Quaternion(
-        scale0 * q0.w + scale1 * q1Temp.w,
-        scale0 * q0.x + scale1 * q1Temp.x,
-        scale0 * q0.y + scale1 * q1Temp.y,
-        scale0 * q0.z + scale1 * q1Temp.z
-    );
-}
-
-// 应用旋转向量
-void Quaternion::rotateVector(double vx, double vy, double vz,
-                              double& rx, double& ry, double& rz) const {
-    // q * v * q^(-1)
-    // 其中 v 作为纯四元数 (0, vx, vy, vz)
-    // 简化公式（假设四元数已归一化）：
-    // v' = v + 2 * cross(q_xyz, cross(q_xyz, v) + q_w * v)
-
-    double ux = x, uy = y, uz = z;
-
-    double crossX = uy * vz - uz * vy;
-    double crossY = uz * vx - ux * vz;
-    double crossZ = ux * vy - uy * vx;
-
-    double tempX = vx + 2.0 * (uy * crossZ - uz * crossY);
-    double tempY = vy + 2.0 * (uz * crossX - ux * crossZ);
-    double tempZ = vz + 2.0 * (ux * crossY - uy * crossX);
-
-    rx = tempX;
-    ry = tempY;
-    rz = tempZ;
-}
-
-// 获取旋转矩阵 (3x3, 行主序)
-void Quaternion::toRotationMatrix(double matrix[3][3]) const {
-    double ww = w * w;
-    double xx = x * x;
-    double yy = y * y;
-    double zz = z * z;
-    double wx = w * x;
-    double wy = w * y;
-    double wz = w * z;
-    double xy = x * y;
-    double xz = x * z;
-    double yz = y * z;
-
-    matrix[0][0] = 1 - 2 * (yy + zz);
-    matrix[0][1] = 2 * (xy - wz);
-    matrix[0][2] = 2 * (xz + wy);
-
-    matrix[1][0] = 2 * (xy + wz);
-    matrix[1][1] = 1 - 2 * (xx + zz);
-    matrix[1][2] = 2 * (yz - wx);
-
-    matrix[2][0] = 2 * (xz - wy);
-    matrix[2][1] = 2 * (yz + wx);
-    matrix[2][2] = 1 - 2 * (xx + yy);
-}
+// ============================================================
+// Quaternion 类已由 SimTools 提供
+// 所有四元数运算（构造、转换、插值等）现在使用 SimTools::Vector4d
+// ============================================================
 
 // ============================================================================
 // Parameters 默认参数获取
@@ -450,8 +233,9 @@ void Loop::initialize(const Parameters& params) {
     loopCenterAltitude = initialAltitude;
 
     // 自动计算完成时间
+    // 注意：必须修改 this->params.duration，而不是原始 params
     if (params.autoCalculateDuration) {
-        const_cast<Parameters&>(params).duration = calculateTheoreticalDuration(initialSpeed, params.targetGForce);
+        this->params.duration = calculateTheoreticalDuration(initialSpeed, params.targetGForce);
     }
 }
 
@@ -603,13 +387,13 @@ void SplitS::initialize(const Parameters& params) {
     loopRadius = (initialSpeed * initialSpeed) / (Constants::G * (params.targetGForce - 1.0));
 
     // 初始化四元数为单位四元数（正飞状态）
-    currentQuaternion = Quaternion();
+    currentQuaternion = Quaternion::Identity();
 
     // 计算滚转结束时的姿态四元数（倒飞状态，roll = 180°，半筋斗起点）
-    rollEndQuaternion = Quaternion::fromEuler(M_PI * params.rollDirection, 0.0, initialYaw);
+    rollEndQuaternion = Quaternion::FromEuler(M_PI * params.rollDirection, 0.0, initialYaw);
 
     // 计算半筋斗结束时的姿态四元数（正飞状态，roll = 0°，航向反转180°）
-    halfLoopEndQuaternion = Quaternion::fromEuler(0.0, 0.0, initialYaw + M_PI);
+    halfLoopEndQuaternion = Quaternion::FromEuler(0.0, 0.0, initialYaw + M_PI);
 }
 
 void SplitS::update(double currentTime, double dt,
@@ -630,8 +414,8 @@ void SplitS::update(double currentTime, double dt,
         double rollProgress = maneuverTime / rollDuration;
 
         // 使用SLERP插值计算当前姿态（从正飞到倒飞）
-        Quaternion startQuaternion = Quaternion::fromEuler(0.0, 0.0, initialYaw);
-        currentQuaternion = Quaternion::slerp(startQuaternion, rollEndQuaternion, rollProgress);
+        Quaternion startQuaternion = Quaternion::FromEuler(0.0, 0.0, initialYaw);
+        currentQuaternion = Quaternion::Slerp(startQuaternion, rollEndQuaternion, rollProgress);
 
         // 沿直线飞行，高度不变
         double distance = initialSpeed * maneuverTime;
@@ -713,11 +497,11 @@ void SplitS::update(double currentTime, double dt,
         // SLERP会自动处理中间所有姿态，包括最底点的俯冲姿态
 
         // 使用SLERP计算当前姿态（插值因子从0到1）
-        currentQuaternion = Quaternion::slerp(rollEndQuaternion, halfLoopEndQuaternion, pitchProgress);
+        currentQuaternion = Quaternion::Slerp(rollEndQuaternion, halfLoopEndQuaternion, pitchProgress);
     }
 
     // 将四元数转换为欧拉角输出
-    attitude = currentQuaternion.toEuler();
+    attitude = ToAttitudeAngles(currentQuaternion);
 }
 
 void SplitS::reset() {
@@ -725,7 +509,7 @@ void SplitS::reset() {
     currentGForce = 1.0;
     currentPhase = ROLL_PHASE;
     phaseTime = 0.0;
-    currentQuaternion = Quaternion();  // 重置为单位四元数
+    currentQuaternion = Quaternion::Identity();  // 重置为单位四元数
 }
 
 // ============================================================================
@@ -760,9 +544,10 @@ void ConstantTurn::initialize(const Parameters& params) {
         std::cos(params.initialPosition.latitude * Constants::DEG_TO_RAD)) * Constants::RAD_TO_DEG;
 
     // 自动计算持续时间（基于圈数）
-    if (params.autoCalculateDuration) {
+    // 注意：必须修改 this->params.duration，而不是原始 params
+    if (params.autoCalculateDuration || params.numCircles > 1) {
         double circleDuration = (2.0 * M_PI) / std::abs(turnRate);
-        const_cast<Parameters&>(params).duration = circleDuration * params.numCircles;
+        this->params.duration = circleDuration * params.numCircles;
     }
 }
 
@@ -851,8 +636,9 @@ void RacetrackPattern::initialize(const Parameters& params) {
     t4 = t3 + turnDuration;
 
     // 自动计算总持续时间
+    // 注意：必须修改 this->params.duration，而不是原始 params
     if (params.autoCalculateDuration) {
-        const_cast<Parameters&>(params).duration = totalLapDuration * params.numLaps;
+        this->params.duration = totalLapDuration * params.numLaps;
     }
 
     // 计算第一个转弯圆心（在第一段直道终点左侧/右侧）
@@ -967,8 +753,9 @@ void EightPattern::initialize(const Parameters& params) {
     circleDuration = (2.0 * M_PI) / turnRate;
 
     // 自动计算总持续时间
+    // 注意：必须修改 this->params.duration，而不是原始 params
     if (params.autoCalculateDuration) {
-        const_cast<Parameters&>(params).duration = circleDuration * 2.0;  // 两个圆
+        this->params.duration = circleDuration * 2.0;  // 两个圆
     }
 
     // 计算两个圆的圆心

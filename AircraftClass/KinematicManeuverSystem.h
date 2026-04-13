@@ -6,74 +6,37 @@
 #include <memory>
 #include <cmath>
 
+// ============================================================
+// 使用 SimTools 提供的四元数类
+// ============================================================
+// 定义 USE_EIGEN 使用 Eigen 版本
+#define USE_EIGEN
+#define SIMTOOLS_STATIC
+#include "SimTools_v2.h"
+
 namespace KinematicManeuver {
 
-// ============================================================================
-// 四元数工具类 - 用于姿态解算
-// ============================================================================
-// 四元数格式: q = w + xi + yj + zk (w是标量部分)
-// 使用四元数可以避免欧拉角的万向节锁问题，且旋转插值更平滑
-// ============================================================================
-class Quaternion {
-public:
-    double w, x, y, z;
+// ============================================================
+// 类型别名
+// ============================================================
+using Quaternion = SimTools::Quaternion;
+using Vector3d = SimTools::Vector3d;
 
-    // 构造函数
-    Quaternion() : w(1.0), x(0.0), y(0.0), z(0.0) {}  // 单位四元数
-    Quaternion(double w, double x, double y, double z) : w(w), x(x), y(y), z(z) {}
+// ============================================================
+// 适配 AttitudeAngles 结构体的转换
+// ============================================================
+inline Quaternion FromEuler(const AttitudeAngles& attitude) {
+    return Quaternion::FromEuler(attitude.roll, attitude.pitch, attitude.yaw);
+}
 
-    // 从欧拉角构造四元数 (ZYX顺序: yaw->pitch->roll)
-    static Quaternion fromEuler(double roll, double pitch, double yaw);
-    static Quaternion fromEuler(const AttitudeAngles& attitude);
-
-    // 从旋转轴和角度构造四元数
-    static Quaternion fromAxisAngle(double axisX, double axisY, double axisZ, double angle);
-
-    // 从旋转轴和角度构造四元数（向量形式）
-    static Quaternion fromAxisAngle(const double axis[3], double angle);
-
-    // 转换为欧拉角
-    AttitudeAngles toEuler() const;
-    void toEuler(double& roll, double& pitch, double& yaw) const;
-
-    // 四元数归一化
-    Quaternion normalized() const;
-
-    // 四元数共轭
-    Quaternion conjugate() const;
-
-    // 四元数求逆
-    Quaternion inverse() const;
-
-    // 四元数乘法
-    Quaternion operator*(const Quaternion& q) const;
-
-    // 四元数与标量乘法
-    Quaternion operator*(double scalar) const;
-
-    // 四元数加法
-    Quaternion operator+(const Quaternion& q) const;
-
-    // 计算四元数的模（长度）
-    double norm() const;
-
-    // 计算四元数的模的平方
-    double normSquared() const;
-
-    // 点积
-    double dot(const Quaternion& q) const;
-
-    // 球面线性插值 (SLERP) - 用于平滑旋转过渡
-    // t: [0, 1] 之间的插值参数
-    static Quaternion slerp(const Quaternion& q0, const Quaternion& q1, double t);
-
-    // 应用旋转向量
-    void rotateVector(double vx, double vy, double vz,
-                      double& rx, double& ry, double& rz) const;
-
-    // 获取旋转矩阵 (3x3, 行主序)
-    void toRotationMatrix(double matrix[3][3]) const;
-};
+inline AttitudeAngles ToAttitudeAngles(const Quaternion& q) {
+    Vector3d euler = q.ToEuler();
+    AttitudeAngles result;
+    result.roll = euler[0];
+    result.pitch = euler[1];
+    result.yaw = euler[2];
+    return result;
+}
 
 // ============================================================================
 // 机动类型枚举
