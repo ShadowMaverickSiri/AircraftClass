@@ -69,6 +69,12 @@
     <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
   </ImportGroup>
   <PropertyGroup Label="UserMacros" />
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+    <IncludePath>$(VC_IncludePath);$(WindowsSDK_IncludePath);$(EIGEN3_ROOT);</IncludePath>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+    <IncludePath>$(VC_IncludePath);$(WindowsSDK_IncludePath);$(EIGEN3_ROOT);</IncludePath>
+  </PropertyGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
     <ClCompile>
       <WarningLevel>Level3</WarningLevel>
@@ -134,12 +140,16 @@
     <ClInclude Include="FighterJet.h" />
     <ClInclude Include="KinematicManeuverSystem.h" />
     <ClInclude Include="TacviewTelemetry.h" />
+    <ClInclude Include="Tacview.h" />
+    <ClInclude Include="AcmiEncoder.h" />
     <ClInclude Include="ACMI.h" />
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="AircraftModelLibrary.cpp" />
     <ClCompile Include="KinematicManeuverSystem.cpp" />
     <ClCompile Include="TacviewTelemetry.cpp" />
+    <ClCompile Include="Tacview.cpp" />
+    <ClCompile Include="AcmiEncoder.cpp" />
     <ClCompile Include="ACMI.cpp" />
     <ClCompile Include="KinematicManeuverExample.cpp" />
   </ItemGroup>

@@ -40,8 +40,22 @@ AircraftClass 是一个用 C++ 实现的飞行器机动运动学仿真系统，�
 ### 3. Tacview 实时遥测
 
 - 支持 Tacview 实时遥测协议 (TCP 端口 42674)
-- 自动发送 ACMI 格式数据
-- 包含时间帧标记、对象初始化和状态更新
+- 提供独立的 `tacview::Tacview` 模块，不依赖机动模型、SimTools 或 Eigen
+- 上游只需提交统一的 `ObjectState`，可接入仿真、网络或文件回放等数据源
+- 自动完成 ACMI 2.2 编码、对象管理、多客户端发送和晚连接状态补发
+- 支持异步发送和可选 `.acmi` 文件记录
+
+最小调用流程：
+
+```cpp
+tacview::Tacview output;
+output.start();
+output.addObject({1, "F-16C", "Air+FixedWing", "Blue"});
+output.update(state);
+output.stop();
+```
+
+详细接口、单位约定和多对象示例见 [TACVIEW模块使用手册.md](TACVIEW模块使用手册.md)。
 
 ### 4. 飞行器模型库 (AircraftModelLibrary)
 
@@ -60,8 +74,12 @@ AircraftClass-main/
 │   ├── KinematicManeuverSystem.h       # 机动模型头文件（含四元数类）
 │   ├── KinematicManeuverSystem.cpp     # 机动模型实现
 │   ├── KinematicManeuverExample.cpp    # 使用示例程序
-│   ├── TacviewTelemetry.cpp            # Tacview遥测数据生成
-│   └── ACMI.h/cpp                      # ACMI 文件格式支持
+│   ├── Tacview.h/cpp                   # 推荐的独立遥测模块
+│   ├── AcmiEncoder.h/cpp               # ACMI 2.2 编码器
+│   ├── TacviewMinimalExample.cpp       # 独立模块最小示例
+│   ├── CMakeLists.txt                  # 独立静态库构建入口
+│   ├── TacviewTelemetry.h/cpp          # 旧示例兼容接口
+│   └── ACMI.h/cpp                      # 旧版实验性编码器（不推荐新代码使用）
 ├── bin/
 │   └── SimTools_v2.h                   # 静态库头文件
 └── README.md
