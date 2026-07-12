@@ -29,6 +29,11 @@ bld/
 *.opendb
 *.VC.db
 *.VC.VC.opendb
+*.log
+*.tlog
+*.obj
+*.suo
+
 
 # Resharper
 _ReSharper*/
@@ -43,6 +48,7 @@ _ReSharper*/
 # CSV output files
 *.csv
 !*.csv.templates
+*.dat
 
 # Windows
 Thumbs.db
