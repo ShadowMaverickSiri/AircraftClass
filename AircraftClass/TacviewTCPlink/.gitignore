@@ -1,0 +1,8 @@
+# CMake 本地构建与安装产物不属于源码发布包。
+/build/
+/package/
+
+# 示例与测试可能生成的 ACMI 文件。
+/*.acmi
+/examples/*.acmi
+/tests/*.acmi
